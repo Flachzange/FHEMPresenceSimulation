@@ -1,0 +1,18 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install commandref parser dependency
+        run: sudo apt-get update && sudo apt-get install -y libhtml-tree-perl
+      - name: Run repository checks
+        run: scripts/ci.sh

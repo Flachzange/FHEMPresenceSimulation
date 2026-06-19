@@ -1,0 +1,9 @@
+/dist/
+/*.zip
+/*.zip.sha256
+/*-ZIP-CHECK.txt
+/98_PresenceSimulation_CURRENT_v*.pm
+/98_PresenceSimulation_v*.pm
+*.swp
+*~
+.DS_Store

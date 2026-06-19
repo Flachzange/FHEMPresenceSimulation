@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libhtml-tree-perl zip unzip
+      - name: Verify tag matches module version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          version=$(perl -ne 'if (/my\s+\$PRESENCE_SIM_VERSION\s*=\s*\x27([^\x27]+)\x27/) { print $1; exit }' 98_PresenceSimulation.pm)
+          test "${GITHUB_REF_NAME}" = "v${version}"
+      - name: Build verified release
+        run: scripts/build-release.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: presence-simulation-release
+          path: dist/
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/PresenceSimulation_*.zip \
+            dist/PresenceSimulation_*.zip.sha256 \
+            dist/PresenceSimulation_*-ZIP-CHECK.txt \
+            dist/98_PresenceSimulation_v*.pm \
+            --generate-notes
