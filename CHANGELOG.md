@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.1.9 — 2026-06-27
+
+This release adds an independent execution switch for the optional `eventFn` handler.
+Persistence schema 3 remains unchanged.
+
+### Switchable event handler
+
+- Added the `eventFnEnabled 0|1` attribute with an effective default of `1`.
+- Value `0` keeps the complete `eventFn` configuration stored while suppressing only
+  handler execution. The `simulationEvent` reading and FHEM event continue unchanged.
+- Re-enabling with value `1`, or deleting `eventFnEnabled`, immediately restores the
+  existing handler without rewriting it.
+- Toggling the attribute does not reinitialize the module, rebuild the model, reset
+  timers, or discard pending real or dry-run plans.
+- Disabling clears an existing `lastError` only when its source is `eventFn`; errors
+  from other subsystems remain untouched.
+- `eventFn` remains validated when configured, even while execution is disabled.
+
+### Tests
+
+- Expanded the suite to 378 tests. New checks cover attribute validation,
+  backward-compatible defaults, unchanged event publication, dry-run and playback
+  execution, plan preservation, absence of reinitialization, and selective error
+  clearing.
+
 ## 1.1.8 — 2026-06-17
 
 This release corrects the runtime of a pending blocked plan that starts later in its

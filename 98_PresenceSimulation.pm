@@ -29,7 +29,7 @@ use Digest::SHA qw(sha1_hex);
 
 our (%defs, %attr, $readingFnAttributes, $init_done);
 
-my $PRESENCE_SIM_VERSION = '1.1.8';
+my $PRESENCE_SIM_VERSION = '1.1.9';
 my $PRESENCE_SIM_SCHEMA  = 3;
 my $PRESENCE_SIM_MAX_DURATION_MINUTES = 1440;
 my $PRESENCE_SIM_OFF_MAX_ATTEMPTS = 3;
@@ -564,6 +564,7 @@ sub PresenceSimulation_Initialize {
         . 'probabilityFactor:textField '
         . 'weekdaySpecific:0,1 '
         . 'eventFn:textField-long '
+        . 'eventFnEnabled:0,1 '
         . 'disable:1,0 '
         . 'disabledForIntervals:textField-long '
         . $readingFnAttributes;
@@ -1745,6 +1746,11 @@ sub PresenceSimulation_Attr {
         elsif ($cmd eq 'del') {
             PresenceSimulation_ClearError($hash, 'eventFn');
         }
+    }
+    elsif ($attrName eq 'eventFnEnabled' && $cmd eq 'set') {
+        return 'eventFnEnabled must be 0 or 1'
+            if !defined $attrValue || $attrValue !~ /^(?:0|1)$/;
+        PresenceSimulation_ClearError($hash, 'eventFn') if !$attrValue;
     }
 
     if ($cmd eq 'set') {
@@ -3495,6 +3501,8 @@ sub PresenceSimulation_EventFnSpecials {
 sub PresenceSimulation_CallEventFn {
     my ($hash, $eventText, $eventData) = @_;
     my $name = $hash->{NAME};
+    return if !AttrVal($name, 'eventFnEnabled', 1);
+
     my $handler = AttrVal($name, 'eventFn', '');
     return if $handler eq '';
     $handler =~ s/^\s+|\s+$//g;
@@ -5234,6 +5242,13 @@ time block. It does not preserve the complete daily number or sequence of sessio
       Perl block. The handler runs synchronously and should return quickly. Errors
       are caught and reported through <code>lastError</code> with source
       <code>eventFn</code>.</li>
+  <li><code>eventFnEnabled 0|1</code><br>Controls execution of a configured
+      <code>eventFn</code>. The default is 1. Value 0 keeps the complete handler
+      attribute stored but suppresses its execution; <code>simulationEvent</code>
+      continues to be published unchanged. Changes take effect with the next event
+      and do not rebuild or reset plans. Deleting the attribute restores the default
+      value 1. Disabling clears an existing error whose source is
+      <code>eventFn</code>.</li>
   <li><code>disable 0|1</code>, <code>disabledForIntervals</code><br>Use the standard FHEM disable controls. Managed playback devices are switched off when the disabled state becomes active.</li>
 </ul>
 
@@ -5563,6 +5578,14 @@ wird dadurch nicht erhalten.</p>
       Perl-Block aufgerufen werden. Der Handler wird synchron ausgef&uuml;hrt und
       sollte daher schnell zur&uuml;ckkehren. Fehler werden abgefangen und &uuml;ber
       <code>lastError</code> mit Quelle <code>eventFn</code> gemeldet.</li>
+  <li><code>eventFnEnabled 0|1</code><br>Steuert die Ausf&uuml;hrung einer
+      konfigurierten <code>eventFn</code>. Standard ist 1. Bei Wert 0 bleibt das
+      vollst&auml;ndige Handler-Attribut gespeichert, wird aber nicht ausgef&uuml;hrt;
+      <code>simulationEvent</code> wird unver&auml;ndert weiter erzeugt. Eine
+      &Auml;nderung wirkt ab dem n&auml;chsten Ereignis und baut keine Pl&auml;ne neu auf.
+      Das L&ouml;schen des Attributs stellt den Standardwert 1 wieder her. Beim
+      Deaktivieren wird ein vorhandener Fehler mit Quelle <code>eventFn</code>
+      gel&ouml;scht.</li>
   <li><code>disable 0|1</code>, <code>disabledForIntervals</code><br>Verwendet die standardm&auml;&szlig;igen FHEM-Deaktivierungsfunktionen. Wenn der deaktivierte Zustand aktiv wird, werden vom Playback verwaltete Ger&auml;te ausgeschaltet.</li>
 </ul>
 
@@ -5665,9 +5688,9 @@ wird dadurch nicht erhalten.</p>
   },
   "name": "FHEM-PresenceSimulation",
   "abstract": "Learns device switching behaviour and simulates presence",
-  "description": "A rolling FHEM presence simulation based on historical device switching sessions. Retained event and DbLog days share one model while trainingSource controls ongoing acquisition and automatic imports. Command targets can use separate observation devices for live feedback and DbLog history. Bounded OFF retries and hardened nonblocking DbLog workers improve runtime safety. It supports generic inline event handlers, real playback, dry-run events, weekday models, and blocking conditions.",
-  "version": "v1.1.8",
-  "x_release_date": "2026-06-17",
+  "description": "A rolling FHEM presence simulation based on historical device switching sessions. Retained event and DbLog days share one model while trainingSource controls ongoing acquisition and automatic imports. Command targets can use separate observation devices for live feedback and DbLog history. Bounded OFF retries and hardened nonblocking DbLog workers improve runtime safety. It supports switchable generic inline event handlers, real playback, dry-run events, weekday models, and blocking conditions.",
+  "version": "v1.1.9",
+  "x_release_date": "2026-06-27",
   "release_status": "testing",
   "license": [
     "gpl_2"

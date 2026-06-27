@@ -1,6 +1,6 @@
-# Review checklist for PresenceSimulation 1.1.8
+# Review checklist for PresenceSimulation 1.1.9
 
-Release self-test baseline: **364/364 PASS**.
+Release self-test baseline: **378/378 PASS**.
 
 ## Implemented
 
@@ -40,6 +40,9 @@ Release self-test baseline: **364/364 PASS**.
   silently at the boundary without a duplicate blocked event.
 - Version-1.1.1 schema-3 state remains loadable without planning maps.
 - Probability diagnostics distinguish historical, factor-adjusted, and effective values.
+- Optional `eventFnEnabled` suppresses only `eventFn` execution while preserving the
+  configured handler, normal `simulationEvent` publication, pending plans, and all
+  non-`eventFn` errors.
 - Optional `readingDevice` cleanly separates the command target from the observed
   live/DbLog state while defaulting to the command device.
 - Notification routing, current-state checks, manual-intervention detection,
@@ -85,6 +88,17 @@ The automated suite uses FHEM stubs. Before publication beyond `testing`/`experi
 - FHEM shutdown/restart,
 - `disabledForIntervals`,
 - and harmless real playback devices.
+
+## 1.1.9 eventFn execution switch
+
+- [ ] A configured `eventFn` executes when `eventFnEnabled` is absent or set to `1`.
+- [ ] `eventFnEnabled=0` suppresses the handler but not the `simulationEvent` reading
+      or its FHEM event.
+- [ ] Re-enabling or deleting the switch uses the unchanged stored handler.
+- [ ] Toggling the switch leaves pending dry-run and playback plans intact and does
+      not schedule module reinitialization.
+- [ ] Disabling clears only an active error with `lastErrorSource=eventFn`.
+- [ ] Invalid switch values and an empty `eventFn` are rejected even while disabled.
 
 ## 1.1.8 pending blocked plans
 
