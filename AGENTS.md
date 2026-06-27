@@ -56,6 +56,7 @@ If `readingDevice` is omitted it defaults to `device`.
     `$NAME`, `$MODE`, `$DEVICE`, `$ACTION`, `$EVENT`, `$EVENTDETAILS`.
 15. Do not add `%` placeholders, `fn:`/`cmd:` syntaxes, implicit function calls, or
     module-specific `msg` handling.
+16. Keep the implementation consolidated. Reuse and improve existing functions and abstractions wherever reasonably possible instead of attaching new standalone functions or parallel code paths. New helpers must have a clear responsibility and must reduce, not increase, duplication and fragmentation.
 
 ## Defaults and public state
 
