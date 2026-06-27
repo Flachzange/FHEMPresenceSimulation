@@ -24,10 +24,10 @@ defmod PresenceSimulation PresenceSimulation
 
 A new instance starts safely in `mode=off` and requires at least one valid `deviceNN` attribute.
 
-Version 1.1.8 preserves the originally planned end time after a blocked start is
-released: the waiting time is subtracted from the sampled duration. If less than one
-full minute remains, the plan expires without switching. Persistence schema 3 remains
-unchanged.
+Version 1.1.9 adds the optional `eventFnEnabled` switch. A configured `eventFn`
+can now be disabled without deleting its command text, while `simulationEvent`
+continues unchanged. Toggling the handler does not rebuild plans or change persistence
+schema 3.
 
 FHEMWEB uses a module-owned default state-icon mapping without creating an
 attribute:
@@ -94,6 +94,25 @@ For daily automatic imports, set the DbLog device first and then use:
 ```text
 attr PresenceSimulation trainingSource dblog
 ```
+
+## Optional simulation event handler
+
+A FHEM command, command chain, or Perl block can be executed for every
+`simulationEvent`:
+
+```text
+attr PresenceSimulation eventFn msg @Bewohner msgPrio="" msgText="$EVENT"
+```
+
+Temporarily disable only the handler while retaining its complete configuration:
+
+```text
+attr PresenceSimulation eventFnEnabled 0
+```
+
+Set the value to `1` or delete `eventFnEnabled` to enable execution again. The
+effective default is `1`. Disabling the handler does not suppress `simulationEvent`,
+restart the module, rebuild the model, or discard pending plans.
 
 ## Probability model
 
@@ -219,7 +238,7 @@ scripts/build-release.sh
 
 Generated files are written to `dist/`. GitHub Actions runs the same checks for every
 push and pull request. A tag matching the embedded module version, for example
-`v1.1.8`, builds the release and publishes the verified artifacts through GitHub
+`v1.1.9`, builds the release and publishes the verified artifacts through GitHub
 Releases.
 
 Codex instructions and project invariants are maintained in `AGENTS.md`. Changes

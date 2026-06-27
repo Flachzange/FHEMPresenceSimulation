@@ -1,6 +1,6 @@
-# Testing PresenceSimulation 1.1.8
+# Testing PresenceSimulation 1.1.9
 
-Expected self-test result for this release: **364/364 PASS**.
+Expected self-test result for this release: **378/378 PASS**.
 
 ## Automated checks
 
@@ -102,6 +102,21 @@ FHEMWEB icon default.
 11. Confirm persistence files below `FHEM/FhemUtils` are mode `0600` and that restart/reload restores current schema-3 state.
 
 A real FHEM/DbLog integration test is still required before changing the release status from `testing`/`experimental`.
+
+## 1.1.9 focused checks
+
+- Configure an `eventFn`, set `eventFnEnabled 0`, and trigger dry-run and playback
+  events. Verify that `simulationEvent` continues to update while the handler command
+  is not executed.
+- Set `eventFnEnabled 1` and verify that the unchanged stored handler runs again.
+  Delete `eventFnEnabled` and confirm that the effective default is also enabled.
+- Toggle the attribute while a real or dry-run plan is pending. Verify that no module
+  reinitialization occurs and that the pending plan remains intact.
+- Produce an error with `lastErrorSource=eventFn`, disable the handler, and verify that
+  the error is cleared. Repeat with a different error source and verify that it is
+  preserved.
+- Attempt to configure an empty `eventFn` while `eventFnEnabled=0`; validation must
+  still reject the empty handler.
 
 ## 1.1.8 focused checks
 

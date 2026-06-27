@@ -1225,6 +1225,76 @@ sub raw_day {
 }
 
 {
+    my $name = 'EventFnEnabled';
+    my $hash = make_instance($name, eventFn => 'set EventSink text $EVENT');
+
+    is(
+        PresenceSimulation_Attr('set', $name, 'eventFnEnabled', '2'),
+        'eventFnEnabled must be 0 or 1',
+        'eventFnEnabled rejects values outside 0 and 1',
+    );
+    is(PresenceSimulation_Attr('set', $name, 'eventFnEnabled', '0'), undef,
+        'eventFnEnabled accepts 0');
+    is(PresenceSimulation_Attr('set', $name, 'eventFnEnabled', '1'), undef,
+        'eventFnEnabled accepts 1');
+
+    $TEST_ATTR{$name}{eventFnEnabled} = 0;
+    is(
+        PresenceSimulation_Attr('set', $name, 'eventFn', ''),
+        'eventFn must not be empty',
+        'eventFn remains validated while execution is disabled',
+    );
+
+    @TEST_COMMANDS = ();
+    delete $TEST_READINGS{$name}{simulationEvent};
+    PresenceSimulation_EmitSimulationEvent(
+        $hash, 'dryrun', 'DisabledHandlerDevice', 'on', { durationMinutes => 5 },
+    );
+    like($TEST_READINGS{$name}{simulationEvent}, qr/mode=dryrun .*action=on/,
+        'disabled eventFn does not suppress simulationEvent');
+    is(scalar @TEST_COMMANDS, 0,
+        'eventFnEnabled zero suppresses handler execution');
+
+    $PresenceSimulation_DATA{$name}{state}{plannedBins}{sentinel} = { retained => 1 };
+    $PresenceSimulation_DATA{$name}{state}{dryPlannedBins}{sentinel} = { retained => 1 };
+    $TEST_READINGS{$name}{lastError} = 'eventFn command failed: test';
+    $TEST_READINGS{$name}{lastErrorSource} = 'eventFn';
+    $TEST_READINGS{$name}{lastErrorTime} = '2026-06-27 12:00:00';
+    @TEST_TIMERS = ();
+    is(PresenceSimulation_Attr('set', $name, 'eventFnEnabled', '0'), undef,
+        'disabling eventFn succeeds without reinitialization');
+    is($TEST_READINGS{$name}{lastError}, 'none',
+        'disabling clears an existing eventFn error');
+    ok(exists $PresenceSimulation_DATA{$name}{state}{plannedBins}{sentinel}
+        && exists $PresenceSimulation_DATA{$name}{state}{dryPlannedBins}{sentinel},
+        'toggling eventFn execution preserves existing plans');
+    is(scalar @TEST_TIMERS, 0,
+        'toggling eventFn execution schedules no reinitialization timer');
+
+    $TEST_READINGS{$name}{lastError} = 'playback failure';
+    $TEST_READINGS{$name}{lastErrorSource} = 'playback';
+    $TEST_READINGS{$name}{lastErrorTime} = '2026-06-27 12:01:00';
+    PresenceSimulation_Attr('set', $name, 'eventFnEnabled', '0');
+    is($TEST_READINGS{$name}{lastErrorSource}, 'playback',
+        'disabling eventFn preserves errors from other subsystems');
+
+    $TEST_ATTR{$name}{eventFnEnabled} = 1;
+    @TEST_COMMANDS = ();
+    PresenceSimulation_EmitSimulationEvent(
+        $hash, 'playback', 'EnabledHandlerDevice', 'off', {},
+    );
+    is(scalar @TEST_COMMANDS, 1,
+        'eventFnEnabled one re-enables the stored handler for playback events');
+
+    delete $TEST_ATTR{$name}{eventFnEnabled};
+    PresenceSimulation_EmitSimulationEvent(
+        $hash, 'dryrun', 'DefaultHandlerDevice', 'on', {},
+    );
+    is(scalar @TEST_COMMANDS, 2,
+        'deleting eventFnEnabled restores the backward-compatible enabled default');
+}
+
+{
     my $hash = { NAME => 'PersistenceValidation' };
     my $raw = PresenceSimulation_EmptyRaw('PersistenceValidation');
     my ($validated, $error) = PresenceSimulation_ValidatePersistedData($hash, 'raw', $raw);
@@ -1326,6 +1396,8 @@ sub raw_day {
     like($init->{AttrList}, qr/(?:^| )device\[0-9\]\[0-9\]Block\[0-9\]\[0-9\]:textField-long(?: |$)/,
         'regular AttrList contains the wildcard device block attribute');
     ok(!exists $init->{NotifyOrderPrefix}, 'module does not override FHEM notification order without a dependency');
+    like($init->{AttrList}, qr/(?:^| )eventFnEnabled:0,1(?: |$)/,
+        'regular AttrList exposes the eventFn execution switch');
     like($init->{AttrList}, qr/(?:^| )disabledForIntervals:textField-long(?: |$)/,
         'regular AttrList supports the standard disabledForIntervals attribute');
     like($init->{AttrList}, qr/(?:^| )globalBlock\[0-9\]\[0-9\]:textField-long(?: |$)/,
@@ -2325,8 +2397,8 @@ sub raw_day {
         'former commandref anchors are absent');
     ok(index($source, 'raw   => "$dir/PresenceSimulation_Raw_$safe.json"') >= 0,
         'raw persistence uses the PresenceSimulation prefix');
-    like($source, qr/my \$PRESENCE_SIM_VERSION = '1\.1\.8'/,
-        'module version is 1.1.8');
+    like($source, qr/my \$PRESENCE_SIM_VERSION = '1\.1\.9'/,
+        'module version is 1.1.9');
     like($source, qr/^# Copyright \(C\) 2026 Flachzange$/m,
         'source copyright holder is Flachzange');
     unlike($source, qr/Christoph Evers/,
@@ -2448,7 +2520,7 @@ sub raw_day {
     my $meta = eval { JSON::PP->new->decode($meta_text) };
     ok(!$@ && ref $meta eq 'HASH', 'embedded META.json is valid JSON');
     is($meta->{name}, 'FHEM-PresenceSimulation', 'META name matches the new module type');
-    is($meta->{version}, 'v1.1.8', 'META version matches module version');
+    is($meta->{version}, 'v1.1.9', 'META version matches module version');
     ok(exists $meta->{prereqs}{runtime}{requires}{'File::Spec'},
         'META declares the File::Spec runtime prerequisite');
     is_deeply($meta->{author}, ['Flachzange <>'],
