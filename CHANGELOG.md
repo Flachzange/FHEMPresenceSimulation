@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.1.10 — 2026-06-28
+
+This release simplifies exhausted playback OFF handling without changing
+persistence schema 3.
+
+### Automatic release after failed OFF confirmation
+
+- The existing bounded OFF schedule remains unchanged: immediately, after one
+  minute, and after another five minutes, followed by the final confirmation grace
+  period.
+- If OFF is still not confirmed, PresenceSimulation records the failure through the
+  existing `lastError*` readings and the FHEM log, then removes the device from
+  managed playback state without claiming that it is physically off.
+- `activePlayback` and `stoppingPlayback` no longer remain blocked by an exhausted
+  OFF cycle. Playback-sensitive configuration becomes available again as soon as no
+  other managed device remains.
+- Future ON commands remain guarded by the observed device state and are sent only
+  when it is unambiguously classified as `off`.
+- Removed the now-unnecessary `retryOff` and `forceReleaseManaged` set commands.
+- Existing schema-3 files containing a persisted `offFailed` entry remain valid;
+  reconciliation reports the failure and releases the stale managed entry.
+- A final playback OFF error remains visible until a later successful playback ON
+  action clears it or another error supersedes it.
+
+### Tests
+
+- Updated OFF retry, persistence compatibility, restart reconciliation, readings,
+  command-list, and playback safety coverage for automatic release.
+- The complete self-test suite now contains 391 checks.
+
 ## 1.1.9 — 2026-06-27
 
 This release adds an independent execution switch for the optional `eventFn` handler.

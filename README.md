@@ -24,10 +24,10 @@ defmod PresenceSimulation PresenceSimulation
 
 A new instance starts safely in `mode=off` and requires at least one valid `deviceNN` attribute.
 
-Version 1.1.9 adds the optional `eventFnEnabled` switch. A configured `eventFn`
-can now be disabled without deleting its command text, while `simulationEvent`
-continues unchanged. Toggling the handler does not rebuild plans or change persistence
-schema 3.
+Version 1.1.10 simplifies failed OFF handling. After the existing bounded retry
+cycle is exhausted, the module reports the playback error and automatically releases
+the device from managed state instead of requiring a recovery command. Persistence
+schema 3 remains unchanged.
 
 FHEMWEB uses a module-owned default state-icon mapping without creating an
 attribute:
@@ -166,22 +166,15 @@ Wait until `stoppingPlayback` is `0` before changing device or model attributes.
 
 An unresolved OFF state is attempted at most three times: immediately, after one
 minute, and after another five minutes. If the state is still not confirmed after
-the final grace period, PresenceSimulation keeps ownership but sends no more
-automatic commands. The existing `lastError*` readings report the problem; no
-additional failure reading is created.
+the final grace period, PresenceSimulation sends no more automatic OFF commands and
+releases the device from managed state without claiming that it is physically off.
+The existing `lastError*` readings and the FHEM log report the problem; no additional
+failure reading is created. The error remains visible until a later successful
+playback ON action clears it or another error supersedes it.
 
-A new bounded cycle can be started explicitly:
-
-```text
-set PresenceSimulation retryOff <device>
-```
-
-As a last-resort recovery in `mode=off`, an unresolved entry can be released
-without claiming that the device is physically off:
-
-```text
-set PresenceSimulation forceReleaseManaged <device> confirm
-```
+Future playback remains safe after the release: the module sends another ON command
+only when the configured observation reading is unambiguously classified as `off`.
+Devices that still report `on` or an unknown state are not switched on.
 
 ## Diagnostics and blocked-plan behavior
 
@@ -238,7 +231,7 @@ scripts/build-release.sh
 
 Generated files are written to `dist/`. GitHub Actions runs the same checks for every
 push and pull request. A tag matching the embedded module version, for example
-`v1.1.9`, builds the release and publishes the verified artifacts through GitHub
+`v1.1.10`, builds the release and publishes the verified artifacts through GitHub
 Releases.
 
 Codex instructions and project invariants are maintained in `AGENTS.md`. Changes
