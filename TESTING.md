@@ -1,6 +1,6 @@
-# Testing PresenceSimulation 1.1.9
+# Testing PresenceSimulation 1.1.10
 
-Expected self-test result for this release: **378/378 PASS**.
+Expected self-test result for this release: **391/391 PASS**.
 
 ## Automated checks
 
@@ -11,13 +11,14 @@ perl -I t/lib -c 98_PresenceSimulation.pm
 PERL5LIB=t/lib prove -v t/98_PresenceSimulation.t
 ```
 
-The 364 self-tests use small FHEM stubs and cover parsing, exact day-based model
+The 391 self-tests use small FHEM stubs and cover parsing, exact day-based model
 probabilities, historical start positions, one-time block decisions, persisted
 pending plans, factor-adjusted diagnostics, mixed event/DbLog history, manual
 imports, event handlers, persistence, backups, permissions, lifecycle cleanup,
 managed playback recovery, disabled-state handling, commandref content, and META
 data. They additionally verify separate command and observation devices, bounded
-OFF retries and persisted retry state, explicit recovery commands, strict
+OFF retries, automatic release after exhausted confirmation, retained diagnostics,
+the temporary issue-#9 schema-3 failed-entry compatibility path, strict
 `binMinutes`/`maxDuration` validation, secure DbLog parameter files, cancellation
 of queued `WAITING:` workers, malformed callback recovery, and orphan result-file
 cleanup. They also cover canonical instance/config/raw-day constructors,
@@ -94,14 +95,33 @@ FHEMWEB icon default.
 9. Test real playback only with a harmless test device. Set the module to `off`
    and verify the device is switched off and `stoppingPlayback` returns to `0`.
    Also suppress the OFF feedback on a test device and confirm that exactly three
-   attempts occur, no further commands are sent, `lastErrorSource=playback`, and
-   `retryOff` starts one new bounded cycle.
+   attempts occur, no further commands are sent, `lastErrorSource=playback`, and the
+   device is automatically removed from `activePlayback` and `stoppingPlayback`.
+   Keep the device reporting `on` or an unknown state and confirm that no later ON
+   command is sent. After it reports `off`, confirm that future playback can resume.
 
 10. Test `disable` and `disabledForIntervals` while playback owns a test device.
 
 11. Confirm persistence files below `FHEM/FhemUtils` are mode `0600` and that restart/reload restores current schema-3 state.
 
 A real FHEM/DbLog integration test is still required before changing the release status from `testing`/`experimental`.
+
+## 1.1.10 focused checks
+
+- Suppress OFF feedback and verify the unchanged timing: immediate attempt, retry
+  after one minute, retry after another five minutes, and final failure after the
+  last confirmation grace period.
+- Confirm that the failed device is then removed from managed state and both
+  `activePlayback` and `stoppingPlayback`, while `lastErrorSource=playback` and the
+  device-specific error remain visible.
+- Confirm that neither `retryOff` nor `forceReleaseManaged` appears in the set list
+  or is accepted as a command.
+- Reload with a schema-3 state containing `offFailed=1`; confirm that the temporary
+  compatibility path tracked by issue #9 releases the entry automatically while the
+  playback failure remains reported.
+- After automatic release, keep the device reading at `on` and then unknown; no ON
+  command may be sent. Change it to a recognized `off` state and verify that future
+  playback can start and clears the retained playback error after successful ON.
 
 ## 1.1.9 focused checks
 

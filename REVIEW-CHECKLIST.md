@@ -1,6 +1,6 @@
-# Review checklist for PresenceSimulation 1.1.9
+# Review checklist for PresenceSimulation 1.1.10
 
-Release self-test baseline: **378/378 PASS**.
+Release self-test baseline: **391/391 PASS**.
 
 ## Implemented
 
@@ -52,10 +52,14 @@ Release self-test baseline: **378/378 PASS**.
 - Managed stop snapshots persist the observation device without increasing the
   persistence schema; older schema-3 entries remain valid.
 - Public contact-address metadata has been removed; the author is `Flachzange <>`.
-- OFF handling is bounded to three attempts and persists unresolved ownership
-  without adding another public reading.
-- Explicit `retryOff` and confirmed `forceReleaseManaged` recovery paths are
-  documented and tested.
+- OFF handling remains bounded to three attempts. After the final confirmation
+  grace period, the failure is reported and the device is automatically released
+  from managed state without adding another public reading or treating it as off.
+- Removed `retryOff` and `forceReleaseManaged`; diagnosis and any manual device
+  command remain under user control through normal FHEM mechanisms.
+- Existing schema-3 `offFailed` entries are accepted and automatically reconciled
+  while retaining the playback error. This temporary compatibility exception is
+  explicitly marked in code and tracked for removal in issue #9.
 - DbLog credentials are absent from visible BlockingCall arguments and use a
   randomized mode-0600 parameter file.
 - Queued `WAITING:` BlockingCall jobs are invalidated on abort.
@@ -69,7 +73,7 @@ Release self-test baseline: **378/378 PASS**.
 ## Automated verification
 
 - Perl syntax check.
-- 364 self-tests.
+- 391 self-tests.
 - Embedded META JSON parse and CPAN metadata validation.
 - FHEM `commandref_join.pl`-compatible single-module checks for English and German blocks.
 - HTML parse and duplicate-anchor checks.
@@ -88,6 +92,23 @@ The automated suite uses FHEM stubs. Before publication beyond `testing`/`experi
 - FHEM shutdown/restart,
 - `disabledForIntervals`,
 - and harmless real playback devices.
+
+## 1.1.10 automatic failed-OFF release
+
+- [ ] Three OFF commands are sent at the existing bounded times and no fourth
+      command is generated.
+- [ ] After the final grace period, the device is absent from managed state,
+      `activePlayback`, and `stoppingPlayback`.
+- [ ] `lastError`, `lastErrorSource=playback`, `lastErrorTime`, and the FHEM log
+      retain a clear device-specific failure.
+- [ ] `retryOff` and `forceReleaseManaged` are absent from FHEMWEB's set list and
+      rejected as unknown commands.
+- [ ] A persisted schema-3 entry with `offFailed=1` is released on initialization
+      without a schema migration.
+- [ ] A released device reporting `on` or an unknown state receives no ON command;
+      playback resumes only after a recognized `off` state.
+- [ ] Playback-sensitive attributes become editable once no other managed device
+      remains.
 
 ## 1.1.9 eventFn execution switch
 
