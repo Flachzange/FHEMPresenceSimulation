@@ -58,7 +58,8 @@ Release self-test baseline: **391/391 PASS**.
 - Removed `retryOff` and `forceReleaseManaged`; diagnosis and any manual device
   command remain under user control through normal FHEM mechanisms.
 - Existing schema-3 `offFailed` entries are accepted and automatically reconciled
-  while retaining the playback error.
+  while retaining the playback error. This temporary compatibility exception is
+  explicitly marked in code and tracked for removal in issue #9.
 - DbLog credentials are absent from visible BlockingCall arguments and use a
   randomized mode-0600 parameter file.
 - Queued `WAITING:` BlockingCall jobs are invalidated on abort.

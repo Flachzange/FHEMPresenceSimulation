@@ -201,7 +201,7 @@ PresenceSimulation_Raw_<name>.json
 PresenceSimulation_State_<name>.json
 ```
 
-The probability model is rebuilt in memory. Persistent files and backups are written with permissions `0600`. Schema version 3 is required; this release intentionally contains no migration or legacy compatibility code.
+The probability model is rebuilt in memory. Persistent files and backups are written with permissions `0600`. Schema version 3 is required. No general migration or legacy compatibility layer is intended. The only temporary exception is the explicitly tracked handling of schema-3 `offFailed=1` entries written by version 1.1.9; GitHub issue #9 records its later removal.
 
 Version 1.1.1 introduced explicit integer `CORE::time()` values for persisted epoch
 timestamps. This avoids fractional `lastCoverageTick` values in FHEM environments

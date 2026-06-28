@@ -18,7 +18,7 @@ imports, event handlers, persistence, backups, permissions, lifecycle cleanup,
 managed playback recovery, disabled-state handling, commandref content, and META
 data. They additionally verify separate command and observation devices, bounded
 OFF retries, automatic release after exhausted confirmation, retained diagnostics,
-legacy schema-3 failed-entry reconciliation, strict
+the temporary issue-#9 schema-3 failed-entry compatibility path, strict
 `binMinutes`/`maxDuration` validation, secure DbLog parameter files, cancellation
 of queued `WAITING:` workers, malformed callback recovery, and orphan result-file
 cleanup. They also cover canonical instance/config/raw-day constructors,
@@ -116,8 +116,9 @@ A real FHEM/DbLog integration test is still required before changing the release
   device-specific error remain visible.
 - Confirm that neither `retryOff` nor `forceReleaseManaged` appears in the set list
   or is accepted as a command.
-- Reload with a schema-3 state containing `offFailed=1`; confirm that the entry is
-  released automatically and the playback failure remains reported.
+- Reload with a schema-3 state containing `offFailed=1`; confirm that the temporary
+  compatibility path tracked by issue #9 releases the entry automatically while the
+  playback failure remains reported.
 - After automatic release, keep the device reading at `on` and then unknown; no ON
   command may be sent. Change it to a recognized `off` state and verify that future
   playback can start and clears the retained playback error after successful ON.

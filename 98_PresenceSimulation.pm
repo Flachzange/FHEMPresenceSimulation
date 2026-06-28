@@ -815,7 +815,7 @@ sub PresenceSimulation_SwitchOffManagedDevices {
 
     for my $dev (sort keys %{$managed}) {
         my $entry = PresenceSimulation_AsHash($managed->{$dev});
-        if ($entry->{offFailed}) {
+        if (PresenceSimulation_IsTemporaryOffFailedCompatibilityEntry($entry)) {
             PresenceSimulation_ReleaseManagedOffFailure($hash, $dev, $entry);
             next;
         }
@@ -827,8 +827,7 @@ sub PresenceSimulation_SwitchOffManagedDevices {
 
         $entry->{stopping} = 1;
         $entry->{offRetryDue} = $now
-            if !$entry->{offFailed}
-            && int($entry->{offAttempts} // 0) < $PRESENCE_SIM_OFF_MAX_ATTEMPTS;
+            if int($entry->{offAttempts} // 0) < $PRESENCE_SIM_OFF_MAX_ATTEMPTS;
         my $status = PresenceSimulation_ProcessManagedOffEntry(
             $hash, $dev, $entry, $cfg, $now
         );
@@ -2700,6 +2699,15 @@ sub PresenceSimulation_ProcessPlaybackTransition {
     return;
 }
 
+# TEMPORARY schema-3 compatibility, tracked by GitHub issue #9.
+# Version 1.1.9 may have persisted managed entries with offFailed=1; the current
+# runtime never creates that value. Remove this helper, all callers, the optional
+# validation, and the matching tests/documentation after the transition window.
+sub PresenceSimulation_IsTemporaryOffFailedCompatibilityEntry {
+    my ($entry) = @_;
+    return PresenceSimulation_AsHash($entry)->{offFailed} ? 1 : 0;
+}
+
 # Reports an exhausted OFF cycle and ends module ownership without treating the
 # physical device state as off. Future playback still requires an unambiguous
 # observed OFF state before another ON command may be sent.
@@ -2744,7 +2752,7 @@ sub PresenceSimulation_ProcessManagedOffEntry {
     my $data = PresenceSimulation_AsHash($PresenceSimulation_DATA{$name});
     return 'missing' if ref $entry ne 'HASH';
     return PresenceSimulation_ReleaseManagedOffFailure($hash, $dev, $entry)
-        if $entry->{offFailed};
+        if PresenceSimulation_IsTemporaryOffFailedCompatibilityEntry($entry);
     return 'missing' if ref $cfg ne 'HASH';
 
     $entry->{stopping} = 1;
@@ -2820,7 +2828,7 @@ sub PresenceSimulation_ProcessPendingPlaybackStops {
     for my $dev (sort keys %{$managed}) {
         my $entry = PresenceSimulation_AsHash($managed->{$dev});
         next if !$entry->{stopping};
-        if ($entry->{offFailed}) {
+        if (PresenceSimulation_IsTemporaryOffFailedCompatibilityEntry($entry)) {
             PresenceSimulation_ReleaseManagedOffFailure($hash, $dev, $entry);
             next;
         }
@@ -3943,7 +3951,7 @@ sub PresenceSimulation_ReconcileRuntimeState {
 
     for my $dev (keys %{$data->{state}{managed}}) {
         my $entry = PresenceSimulation_AsHash($data->{state}{managed}{$dev});
-        if ($entry->{offFailed}) {
+        if (PresenceSimulation_IsTemporaryOffFailedCompatibilityEntry($entry)) {
             PresenceSimulation_ReleaseManagedOffFailure($hash, $dev, $entry);
             $changed = 1;
             next;
@@ -4518,6 +4526,8 @@ sub PresenceSimulation_ValidatePersistedData {
             return (undef, "state.managed.$dev.onPattern is not a valid regular expression") if $@;
             eval { qr/$entry->{offPattern}/ };
             return (undef, "state.managed.$dev.offPattern is not a valid regular expression") if $@;
+            # TEMPORARY COMPATIBILITY (#9): offFailed remains accepted only for
+            # schema-3 state written before automatic release was introduced.
             for my $flag (qw(stopping offEventEmitted offFailed)) {
                 next if !exists $entry->{$flag};
                 return (undef, "state.managed.$dev.$flag must be 0 or 1")

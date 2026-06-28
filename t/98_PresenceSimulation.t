@@ -1751,7 +1751,7 @@ sub raw_day {
         = (1, 3, 1, 100, 'off not confirmed');
     ($validated, $error) = PresenceSimulation_ValidatePersistedData($hash, 'state', $state);
     ok($validated && !defined $error,
-        'managed playback state accepts persisted bounded OFF retry metadata');
+        'temporary issue-#9 compatibility accepts persisted bounded OFF retry metadata');
     $state->{managed}{DeviceA}{offAttempts} = -1;
     ($validated, $error) = PresenceSimulation_ValidatePersistedData($hash, 'state', $state);
     like($error, qr/offAttempts must be a non-negative integer/,
@@ -1823,7 +1823,7 @@ sub raw_day {
     PresenceSimulation_SetError($hash, "$dev did not confirm off after 3 attempts", 'playback');
     PresenceSimulation_ReconcileRuntimeState($hash);
     ok(!exists $PresenceSimulation_DATA{$name}{state}{managed}{$dev},
-        'restart reconciliation automatically releases a persisted failed managed entry');
+        'temporary issue-#9 compatibility releases a persisted failed managed entry');
     is($TEST_READINGS{$name}{lastError}, "$dev did not confirm off after 3 attempts",
         'restart reconciliation preserves the final playback error after release');
     is($TEST_READINGS{$name}{lastErrorSource}, 'playback',

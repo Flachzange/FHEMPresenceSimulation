@@ -20,7 +20,8 @@ persistence schema 3.
   when it is unambiguously classified as `off`.
 - Removed the now-unnecessary `retryOff` and `forceReleaseManaged` set commands.
 - Existing schema-3 files containing a persisted `offFailed` entry remain valid;
-  reconciliation reports the failure and releases the stale managed entry.
+  reconciliation reports the failure and releases the stale managed entry. This is
+  an explicitly temporary compatibility exception tracked for removal in issue #9.
 - A final playback OFF error remains visible until a later successful playback ON
   action clears it or another error supersedes it.
 
