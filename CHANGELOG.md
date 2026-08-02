@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.1.10 — 2026-08-02
+
+This release prevents a separate observation device from prematurely releasing a
+module-owned playback session while the commanded device is still starting.
+Persistence schema 3 remains unchanged.
+
+### Confirmed playback starts
+
+- New real-playback sessions persist an internal `startConfirmed=0` marker until the
+  configured ON state is observed for the first time.
+- OFF observations before that first ON confirmation no longer release playback
+  ownership or create a manual lock. This supports slow-starting observation sources
+  such as a media service that becomes reachable after its command device was powered.
+- The first matching ON observation confirms the existing session instead of being
+  classified as an unexpected or manual ON.
+- The original planned end time remains unchanged while confirmation is pending.
+- At the planned end, PresenceSimulation still sends the configured OFF command even
+  if ON was never confirmed. A later OFF observation can then confirm that module-owned
+  stop safely.
+- Reload reconciliation preserves an unconfirmed session while its observation source
+  still reports OFF and confirms it when ON becomes observable.
+- Existing schema-3 managed entries without `startConfirmed` retain their previous
+  meaning and are treated as already confirmed. No migration code or public reading
+  was added.
+
+### Tests
+
+- Expanded the suite to 398 tests. New checks cover periodic and event-driven startup
+  OFF observations, delayed ON confirmation, manual OFF after confirmation, safe OFF
+  at the planned end without confirmation, restart reconciliation, validation, and
+  compatibility with older managed entries.
+
 ## 1.1.9 — 2026-06-27
 
 This release adds an independent execution switch for the optional `eventFn` handler.

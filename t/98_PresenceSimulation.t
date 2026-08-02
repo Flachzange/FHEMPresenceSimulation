@@ -696,11 +696,11 @@ sub raw_day {
             validDates => [qw(2026-06-01)],
             devices => {
                 $device => {
-                    allDurations => [1],
+                    allDurations => [3],
                     bins => {
                         40 => {
                             probability => 1, daysWithStart => 1,
-                            durations => [1], startOffsets => [0],
+                            durations => [3], startOffsets => [0],
                         },
                     },
                 },
@@ -725,11 +725,105 @@ sub raw_day {
         'KODI',
         'managed playback persists the separate observation device',
     );
+    is($PresenceSimulation_DATA{$name}{state}{managed}{$device}{startConfirmed}, 0,
+        'new managed playback starts with an unconfirmed ON state');
+
+    PresenceSimulation_RunPlayback($hash, $at1000 + 60, $date);
+    ok(exists $PresenceSimulation_DATA{$name}{state}{managed}{$device},
+        'periodic OFF observation before initial ON confirmation retains playback ownership');
+    is(scalar(grep { $_ eq 'TV_Command cmd_2' } @TEST_COMMANDS), 0,
+        'periodic startup OFF does not send the planned OFF command early');
 
     $TEST_READINGS{KODI}{state} = 'opened';
-    PresenceSimulation_RunPlayback($hash, $at1000 + 60, $date);
+    PresenceSimulation_RunPlayback($hash, $at1000 + 2 * 60, $date);
+    is($PresenceSimulation_DATA{$name}{state}{managed}{$device}{startConfirmed}, 1,
+        'periodic ON observation confirms the module-owned playback start');
+    PresenceSimulation_RunPlayback($hash, $at1000 + 3 * 60, $date);
     is($TEST_COMMANDS[-1], 'TV_Command cmd_2',
         'playback reads the separate observation device before sending offCommand to the command device');
+}
+
+{
+    my $name = 'EventConfirmedPlaybackStart';
+    my $hash = make_instance($name);
+    my $dev = 'SlowObservationDevice';
+    my $cfg = {
+        device => $dev, readingDevice => 'SlowObserver', reading => 'state',
+        onPattern => '^connected$', offPattern => '^disconnected$',
+        onRe => qr/^connected$/, offRe => qr/^disconnected$/,
+        offCommand => 'off',
+    };
+    $PresenceSimulation_DATA{$name}{config} = {
+        order => [$dev], byDevice => { $dev => $cfg },
+        byReadingDevice => { SlowObserver => [$cfg] }, globalBlocks => [], ready => 1,
+    };
+    $PresenceSimulation_DATA{$name}{state}{managed}{$dev} = {
+        offDue => CORE::time() + 300, durationMinutes => 5, modelType => 'all-days',
+        readingDevice => 'SlowObserver', reading => 'state',
+        onPattern => '^connected$', offPattern => '^disconnected$', offCommand => 'off',
+        startConfirmed => 0, stopping => 0, offAttempts => 0,
+        offFailed => 0, offLastError => '',
+    };
+    $PresenceSimulation_DATA{$name}{state}{expected}{$dev} = {
+        state => 'on', until => CORE::time() + 20,
+    };
+
+    PresenceSimulation_ProcessPlaybackTransition($hash, $cfg, 'off');
+    ok(exists $PresenceSimulation_DATA{$name}{state}{managed}{$dev},
+        'event-driven OFF before initial ON confirmation retains playback ownership');
+    ok(!exists $PresenceSimulation_DATA{$name}{state}{manualLockUntil}{$dev},
+        'ignored startup OFF creates no manual playback lock');
+    ok(exists $PresenceSimulation_DATA{$name}{state}{expected}{$dev},
+        'ignored startup OFF keeps the pending ON expectation intact');
+
+    PresenceSimulation_ProcessPlaybackTransition($hash, $cfg, 'on');
+    is($PresenceSimulation_DATA{$name}{state}{managed}{$dev}{startConfirmed}, 1,
+        'first event-driven ON observation confirms the managed start');
+    ok(!exists $PresenceSimulation_DATA{$name}{state}{expected}{$dev},
+        'confirmed ON consumes the pending ON expectation');
+
+    PresenceSimulation_ProcessPlaybackTransition($hash, $cfg, 'off');
+    ok(!exists $PresenceSimulation_DATA{$name}{state}{managed}{$dev},
+        'event-driven OFF after confirmed ON releases playback ownership');
+    ok($PresenceSimulation_DATA{$name}{state}{manualLockUntil}{$dev} > CORE::time(),
+        'confirmed early OFF keeps the existing manual-lock behavior');
+}
+
+{
+    my $name = 'UnconfirmedStartStillStops';
+    my $hash = make_instance($name);
+    my $dev = 'UnconfirmedStopDevice';
+    my $cfg = {
+        device => $dev, readingDevice => 'UnconfirmedObserver', reading => 'state',
+        onPattern => '^on$', offPattern => '^off$',
+        onRe => qr/^on$/, offRe => qr/^off$/, offCommand => 'off',
+    };
+    $PresenceSimulation_DATA{$name}{config} = {
+        order => [$dev], byDevice => { $dev => $cfg },
+        byReadingDevice => { UnconfirmedObserver => [$cfg] }, globalBlocks => [], ready => 1,
+    };
+    my $entry = {
+        offDue => 1000, durationMinutes => 1, modelType => 'all-days',
+        readingDevice => 'UnconfirmedObserver', reading => 'state',
+        onPattern => '^on$', offPattern => '^off$', offCommand => 'off',
+        startConfirmed => 0, stopping => 0, offAttempts => 0,
+        offFailed => 0, offLastError => '',
+    };
+    $PresenceSimulation_DATA{$name}{state}{managed}{$dev} = $entry;
+    $TEST_READINGS{UnconfirmedObserver}{state} = 'off';
+    @TEST_COMMANDS = ();
+
+    PresenceSimulation_ProcessManagedOffEntry($hash, $dev, $entry, $cfg, 1000);
+    is_deeply(\@TEST_COMMANDS, ["$dev off"],
+        'offDue sends OFF even when the initial ON state was never confirmed');
+    ok(exists $PresenceSimulation_DATA{$name}{state}{managed}{$dev},
+        'unconfirmed session remains owned until the sent OFF is confirmed');
+    ok($entry->{offEventEmitted},
+        'successful OFF command makes a later OFF observation authoritative');
+
+    PresenceSimulation_ProcessManagedOffEntry($hash, $dev, $entry, $cfg, 1060);
+    ok(!exists $PresenceSimulation_DATA{$name}{state}{managed}{$dev},
+        'OFF observation after the module-owned stop releases the unconfirmed session');
 }
 
 {
@@ -1752,6 +1846,15 @@ sub raw_day {
     ($validated, $error) = PresenceSimulation_ValidatePersistedData($hash, 'state', $state);
     ok($validated && !defined $error,
         'managed playback state accepts persisted bounded OFF retry metadata');
+    $state->{managed}{DeviceA}{startConfirmed} = 0;
+    ($validated, $error) = PresenceSimulation_ValidatePersistedData($hash, 'state', $state);
+    ok($validated && !defined $error,
+        'managed playback state accepts an optional unconfirmed-start marker');
+    $state->{managed}{DeviceA}{startConfirmed} = 2;
+    ($validated, $error) = PresenceSimulation_ValidatePersistedData($hash, 'state', $state);
+    like($error, qr/startConfirmed must be 0 or 1/,
+        'persisted start confirmation marker is range-checked');
+    $state->{managed}{DeviceA}{startConfirmed} = 0;
     $state->{managed}{DeviceA}{offAttempts} = -1;
     ($validated, $error) = PresenceSimulation_ValidatePersistedData($hash, 'state', $state);
     like($error, qr/offAttempts must be a non-negative integer/,
@@ -1796,6 +1899,41 @@ sub raw_day {
     PresenceSimulation_ReconcileRuntimeState($hash);
     ok(!exists $PresenceSimulation_DATA{$name}{state}{managed}{UnknownDevice},
         'a definitely off device is removed from managed state');
+}
+
+{
+    my $name = 'UnconfirmedReconcile';
+    my $hash = make_instance($name);
+    my $dev = 'DelayedObserverDevice';
+    my $cfg = {
+        device => $dev, readingDevice => $dev, reading => 'state',
+        onPattern => '^on$', offPattern => '^off$', onRe => qr/^on$/, offRe => qr/^off$/,
+        offCommand => 'off',
+    };
+    $PresenceSimulation_DATA{$name}{config} = {
+        order => [$dev], globalBlocks => [], ready => 1, byDevice => { $dev => $cfg },
+    };
+    $PresenceSimulation_DATA{$name}{state}{managed}{$dev} = {
+        offDue => CORE::time() + 300, durationMinutes => 5, modelType => 'all-days',
+        readingDevice => $dev, reading => 'state', onPattern => '^on$',
+        offPattern => '^off$', offCommand => 'off', startConfirmed => 0,
+        stopping => 0, offAttempts => 0, offFailed => 0, offLastError => '',
+    };
+
+    $TEST_READINGS{$dev}{state} = 'off';
+    PresenceSimulation_ReconcileRuntimeState($hash);
+    ok(exists $PresenceSimulation_DATA{$name}{state}{managed}{$dev},
+        'restart reconciliation retains an unconfirmed session while observation is still off');
+
+    $TEST_READINGS{$dev}{state} = 'on';
+    PresenceSimulation_ReconcileRuntimeState($hash);
+    is($PresenceSimulation_DATA{$name}{state}{managed}{$dev}{startConfirmed}, 1,
+        'restart reconciliation confirms a delayed ON observation');
+
+    $TEST_READINGS{$dev}{state} = 'off';
+    PresenceSimulation_ReconcileRuntimeState($hash);
+    ok(!exists $PresenceSimulation_DATA{$name}{state}{managed}{$dev},
+        'restart reconciliation releases OFF after the start was confirmed');
 }
 
 
@@ -2397,8 +2535,8 @@ sub raw_day {
         'former commandref anchors are absent');
     ok(index($source, 'raw   => "$dir/PresenceSimulation_Raw_$safe.json"') >= 0,
         'raw persistence uses the PresenceSimulation prefix');
-    like($source, qr/my \$PRESENCE_SIM_VERSION = '1\.1\.9'/,
-        'module version is 1.1.9');
+    like($source, qr/my \$PRESENCE_SIM_VERSION = '1\.1\.10'/,
+        'module version is 1.1.10');
     like($source, qr/^# Copyright \(C\) 2026 Flachzange$/m,
         'source copyright holder is Flachzange');
     unlike($source, qr/Christoph Evers/,
@@ -2520,7 +2658,7 @@ sub raw_day {
     my $meta = eval { JSON::PP->new->decode($meta_text) };
     ok(!$@ && ref $meta eq 'HASH', 'embedded META.json is valid JSON');
     is($meta->{name}, 'FHEM-PresenceSimulation', 'META name matches the new module type');
-    is($meta->{version}, 'v1.1.9', 'META version matches module version');
+    is($meta->{version}, 'v1.1.10', 'META version matches module version');
     ok(exists $meta->{prereqs}{runtime}{requires}{'File::Spec'},
         'META declares the File::Spec runtime prerequisite');
     is_deeply($meta->{author}, ['Flachzange <>'],

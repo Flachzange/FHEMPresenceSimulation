@@ -1,4 +1,4 @@
-# Testing PresenceSimulation 1.1.9
+# Testing PresenceSimulation 1.1.10
 
 Expected self-test result for this release: **378/378 PASS**.
 
@@ -102,6 +102,25 @@ FHEMWEB icon default.
 11. Confirm persistence files below `FHEM/FhemUtils` are mode `0600` and that restart/reload restores current schema-3 state.
 
 A real FHEM/DbLog integration test is still required before changing the release status from `testing`/`experimental`.
+
+## 1.1.10 focused checks
+
+- Configure a command device with a separate, slow-starting observation device. Start
+  playback while the observation reading still matches `offRegex`. Verify that the
+  session remains managed and that no manual lock is created.
+- Let the observation reading match `onRegex` later. Verify that the existing session
+  is confirmed and retains its original planned end time.
+- Switch the confirmed observation back to `offRegex` before the planned end. Verify
+  that the existing manual-intervention behavior still releases ownership and applies
+  `manualLockMinutes`.
+- Keep the observation source at `offRegex` for the complete session. Verify that the
+  configured OFF command is nevertheless sent at the planned end and that subsequent
+  OFF confirmation releases ownership.
+- Save and reload while the managed start is still unconfirmed. Verify that the state
+  remains managed while OFF is observed, becomes confirmed when ON appears, and is not
+  redrawn or duplicated.
+- Load an otherwise valid schema-3 state entry without `startConfirmed`. Verify that it
+  remains valid and keeps the previous already-confirmed behavior.
 
 ## 1.1.9 focused checks
 

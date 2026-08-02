@@ -1,6 +1,6 @@
-# Review checklist for PresenceSimulation 1.1.9
+# Review checklist for PresenceSimulation 1.1.10
 
-Release self-test baseline: **378/378 PASS**.
+Release self-test baseline: **398/398 PASS**.
 
 ## Implemented
 
@@ -51,6 +51,12 @@ Release self-test baseline: **378/378 PASS**.
   logical command device.
 - Managed stop snapshots persist the observation device without increasing the
   persistence schema; older schema-3 entries remain valid.
+- New managed playback sessions remain unconfirmed until their configured ON state
+  is observed once. Startup OFF observations retain ownership and create no manual
+  lock, while the original planned OFF remains mandatory.
+- Delayed ON confirmation works in periodic processing, event handling, and restart
+  reconciliation. Older schema-3 entries without the optional marker retain their
+  previous already-confirmed behavior.
 - Public contact-address metadata has been removed; the author is `Flachzange <>`.
 - OFF handling is bounded to three attempts and persists unresolved ownership
   without adding another public reading.
@@ -69,7 +75,7 @@ Release self-test baseline: **378/378 PASS**.
 ## Automated verification
 
 - Perl syntax check.
-- 364 self-tests.
+- 398 self-tests.
 - Embedded META JSON parse and CPAN metadata validation.
 - FHEM `commandref_join.pl`-compatible single-module checks for English and German blocks.
 - HTML parse and duplicate-anchor checks.
@@ -88,6 +94,20 @@ The automated suite uses FHEM stubs. Before publication beyond `testing`/`experi
 - FHEM shutdown/restart,
 - `disabledForIntervals`,
 - and harmless real playback devices.
+
+## 1.1.10 delayed ON confirmation
+
+- [ ] With separate command and observation devices, an OFF observation during
+      startup does not release the managed session or create a manual lock.
+- [ ] The first matching ON observation confirms the existing session without
+      changing its planned end time.
+- [ ] A later OFF observation retains the established manual-intervention behavior.
+- [ ] If ON is never confirmed, the configured OFF command is still sent at
+      `offDue` and its confirmation releases ownership.
+- [ ] Save/reload preserves an unconfirmed managed session while the observation
+      source remains OFF and confirms it when ON appears.
+- [ ] Valid older schema-3 managed entries without `startConfirmed` remain loadable
+      and behave as already confirmed.
 
 ## 1.1.9 eventFn execution switch
 
