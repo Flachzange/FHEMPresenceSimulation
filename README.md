@@ -241,7 +241,9 @@ push and pull request. A tag matching the embedded module version, for example
 `v1.1.9`, builds the release and publishes the verified artifacts through GitHub
 Releases.
 
-Codex instructions and project invariants are maintained in `AGENTS.md`. Changes
-should be made on focused `codex/<description>` branches and submitted as draft pull
-requests. Real FHEM, DbLog, device, playback, shutdown, and restart tests remain a
+Reusable FHEM engineering instructions are maintained in [AGENTS.md](AGENTS.md);
+project-specific invariants are in [AGENTS-PresenceSimulation.md](AGENTS-PresenceSimulation.md).
+Read and apply both files. Changes should be made on focused `codex/<description>`
+branches and submitted as draft pull requests. Real FHEM, DbLog, device, playback,
+shutdown, and restart tests remain a
 separate manual release requirement and must be reported honestly.

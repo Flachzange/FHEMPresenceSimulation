@@ -1,5 +1,8 @@
 # Contributing
 
+Read and apply both [AGENTS.md](AGENTS.md) and
+[AGENTS-PresenceSimulation.md](AGENTS-PresenceSimulation.md) before working on this repository.
+
 `98_PresenceSimulation.pm` is the only technical source of truth for the module.
 Do not use generated or versioned copies as development sources.
 
