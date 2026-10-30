@@ -234,7 +234,16 @@ push and pull request. A tag matching the embedded module version, for example
 `v1.1.10`, builds the release and publishes the verified artifacts through GitHub
 Releases.
 
-Codex instructions and project invariants are maintained in `AGENTS.md`. Changes
-should be made on focused `codex/<description>` branches and submitted as draft pull
-requests. Real FHEM, DbLog, device, playback, shutdown, and restart tests remain a
+Reusable FHEM engineering instructions are maintained in [AGENTS.md](AGENTS.md);
+project-specific invariants are in [AGENTS-PresenceSimulation.md](AGENTS-PresenceSimulation.md).
+Read and apply both files. Changes should be made on focused `codex/<description>`
+branches and submitted as draft pull requests. Real FHEM, DbLog, device, playback,
+shutdown, and restart tests remain a
 separate manual release requirement and must be reported honestly.
+
+The generic [AGENTS.md](AGENTS.md) is a synchronized copy from
+[Flachzange/FHEM_Agent_Rules](https://github.com/Flachzange/FHEM_Agent_Rules).
+The adopted commit is recorded in [.github/agent-rules.json](.github/agent-rules.json).
+Propose generic discoveries centrally; keep project-only rules in the supplement.
+CI verifies the accepted revision and exact copy. Configure its status check as
+required in repository settings to enforce it before merging.
