@@ -29,7 +29,7 @@ use Digest::SHA qw(sha1_hex);
 
 our (%defs, %attr, $readingFnAttributes, $init_done);
 
-my $PRESENCE_SIM_VERSION = '1.1.11';
+my $PRESENCE_SIM_VERSION = '1.1.12';
 my $PRESENCE_SIM_SCHEMA  = 3;
 my $PRESENCE_SIM_MAX_DURATION_MINUTES = 1440;
 my $PRESENCE_SIM_OFF_MAX_ATTEMPTS = 3;
@@ -815,10 +815,6 @@ sub PresenceSimulation_SwitchOffManagedDevices {
 
     for my $dev (sort keys %{$managed}) {
         my $entry = PresenceSimulation_AsHash($managed->{$dev});
-        if (PresenceSimulation_IsTemporaryOffFailedCompatibilityEntry($entry)) {
-            PresenceSimulation_ReleaseManagedOffFailure($hash, $dev, $entry);
-            next;
-        }
         my $cfg = PresenceSimulation_ConfigForManagedEntry($data, $dev, $entry);
         if (!$cfg) {
             push @errors, "cannot determine off command for managed device $dev";
@@ -2742,15 +2738,6 @@ sub PresenceSimulation_ProcessPlaybackTransition {
     return;
 }
 
-# TEMPORARY schema-3 compatibility, tracked by GitHub issue #9.
-# Version 1.1.9 may have persisted managed entries with offFailed=1; the current
-# runtime never creates that value. Remove this helper, all callers, the optional
-# validation, and the matching tests/documentation after the transition window.
-sub PresenceSimulation_IsTemporaryOffFailedCompatibilityEntry {
-    my ($entry) = @_;
-    return PresenceSimulation_AsHash($entry)->{offFailed} ? 1 : 0;
-}
-
 # Reports an exhausted OFF cycle and ends module ownership without treating the
 # physical device state as off. Future playback still requires an unambiguous
 # observed OFF state before another ON command may be sent.
@@ -2759,7 +2746,6 @@ sub PresenceSimulation_ReleaseManagedOffFailure {
     my $name = $hash->{NAME};
     my $data = PresenceSimulation_AsHash($PresenceSimulation_DATA{$name});
     my $attempts = int(PresenceSimulation_AsHash($entry)->{offAttempts} // 0);
-    $attempts = $PRESENCE_SIM_OFF_MAX_ATTEMPTS if $attempts < 1;
     my $message = "$dev did not confirm off after $attempts attempts";
 
     delete $data->{state}{managed}{$dev};
@@ -2793,10 +2779,7 @@ sub PresenceSimulation_ProcessManagedOffEntry {
     my ($hash, $dev, $entry, $cfg, $now) = @_;
     my $name = $hash->{NAME};
     my $data = PresenceSimulation_AsHash($PresenceSimulation_DATA{$name});
-    return 'missing' if ref $entry ne 'HASH';
-    return PresenceSimulation_ReleaseManagedOffFailure($hash, $dev, $entry)
-        if PresenceSimulation_IsTemporaryOffFailedCompatibilityEntry($entry);
-    return 'missing' if ref $cfg ne 'HASH';
+    return 'missing' if ref $entry ne 'HASH' || ref $cfg ne 'HASH';
 
     $entry->{stopping} = 1;
 
@@ -2872,10 +2855,6 @@ sub PresenceSimulation_ProcessPendingPlaybackStops {
     for my $dev (sort keys %{$managed}) {
         my $entry = PresenceSimulation_AsHash($managed->{$dev});
         next if !$entry->{stopping};
-        if (PresenceSimulation_IsTemporaryOffFailedCompatibilityEntry($entry)) {
-            PresenceSimulation_ReleaseManagedOffFailure($hash, $dev, $entry);
-            next;
-        }
         my $cfg = PresenceSimulation_ConfigForManagedEntry($data, $dev, $entry);
         if (!$cfg) {
             PresenceSimulation_SetError(
@@ -3460,7 +3439,6 @@ sub PresenceSimulation_RunSimulation {
                 startConfirmed  => 0,
                 stopping        => 0,
                 offAttempts     => 0,
-                offFailed       => 0,
                 offLastError    => '',
             };
         }
@@ -4005,11 +3983,6 @@ sub PresenceSimulation_ReconcileRuntimeState {
 
     for my $dev (keys %{$data->{state}{managed}}) {
         my $entry = PresenceSimulation_AsHash($data->{state}{managed}{$dev});
-        if (PresenceSimulation_IsTemporaryOffFailedCompatibilityEntry($entry)) {
-            PresenceSimulation_ReleaseManagedOffFailure($hash, $dev, $entry);
-            $changed = 1;
-            next;
-        }
         my $cfg = PresenceSimulation_ConfigForManagedEntry($data, $dev, $entry);
         if (!$cfg) {
             push @warnings, "cannot reconcile managed device $dev: missing configuration snapshot";
@@ -4023,6 +3996,7 @@ sub PresenceSimulation_ReconcileRuntimeState {
         elsif (defined $state && $state eq 'off') {
             if (PresenceSimulation_CanAcceptManagedOff($entry)) {
                 delete $data->{state}{managed}{$dev};
+                delete $data->{state}{expected}{$dev};
                 $changed = 1;
                 PresenceSimulation_ClearPlaybackErrorAfterConfirmedOff($hash);
                 PresenceSimulation_Log($hash, 4, "removed stale playback state for $dev: current state is off");
@@ -4591,9 +4565,7 @@ sub PresenceSimulation_ValidatePersistedData {
             return (undef, "state.managed.$dev.onPattern is not a valid regular expression") if $@;
             eval { qr/$entry->{offPattern}/ };
             return (undef, "state.managed.$dev.offPattern is not a valid regular expression") if $@;
-            # TEMPORARY COMPATIBILITY (#9): offFailed remains accepted only for
-            # schema-3 state written before automatic release was introduced.
-            for my $flag (qw(startConfirmed stopping offEventEmitted offFailed)) {
+            for my $flag (qw(startConfirmed stopping offEventEmitted)) {
                 next if !exists $entry->{$flag};
                 return (undef, "state.managed.$dev.$flag must be 0 or 1")
                     if !PresenceSimulation_IsIntegerInRange($entry->{$flag}, 0, 1);
@@ -5381,7 +5353,10 @@ time block. It does not preserve the complete daily number or sequence of sessio
       that it is physically off. The failure remains visible through
       <code>lastError</code> with source <code>playback</code> until a later successful
       playback ON action clears it or another error supersedes it. Future playback
-      still sends ON only when the observed device state is unambiguously OFF.</li>
+      still sends ON only when the observed device state is unambiguously OFF.
+      After a restart, the persisted attempt count and confirmation deadline remain
+      in effect. A confirmed OFF ends management immediately; otherwise an exhausted
+      cycle is released after its final grace period, without a fourth OFF command.</li>
   <li>Changing <code>trainingSource</code> does not delete or hide retained raw
       data. In both modes, imported DbLog days and sufficiently covered event days
       remain eligible for the model. The currently configured <code>dbLogDevice</code>
@@ -5728,7 +5703,11 @@ wird dadurch nicht erhalten.</p>
       Der Fehler bleibt in <code>lastError</code> mit Quelle <code>playback</code>
       sichtbar, bis eine sp&auml;tere erfolgreiche Playback-ON-Aktion ihn l&ouml;scht oder
       ein anderer Fehler ihn ersetzt. Auch k&uuml;nftiges Playback sendet ON nur bei
-      einem eindeutig erkannten OFF-Zustand.</li>
+      einem eindeutig erkannten OFF-Zustand. Nach einem Neustart bleiben die
+      gespeicherte Versuchszahl und Best&auml;tigungsfrist erhalten. Ein best&auml;tigtes
+      OFF beendet die Verwaltung sofort; andernfalls wird ein ausgesch&ouml;pfter
+      Zyklus nach seiner letzten Best&auml;tigungsfrist ohne vierten OFF-Befehl
+      freigegeben.</li>
   <li>Eine &Auml;nderung von <code>trainingSource</code> l&ouml;scht oder verbirgt keine
       gespeicherten Rohdaten. In beiden Modi bleiben importierte DbLog-Tage und
       ausreichend erfasste Event-Tage f&uuml;r das Modell nutzbar. Das aktuell
@@ -5755,7 +5734,7 @@ wird dadurch nicht erhalten.</p>
   "name": "FHEM-PresenceSimulation",
   "abstract": "Learns device switching behaviour and simulates presence",
   "description": "A rolling FHEM presence simulation based on historical device switching sessions. Retained event and DbLog days share one model while trainingSource controls ongoing acquisition and automatic imports. Command targets can use separate observation devices for live feedback and DbLog history. Bounded OFF retries and hardened nonblocking DbLog workers improve runtime safety. It supports switchable generic inline event handlers, real playback, dry-run events, weekday models, and blocking conditions.",
-  "version": "v1.1.11",
+  "version": "v1.1.12",
   "x_release_date": "2026-10-30",
   "release_status": "testing",
   "license": [
