@@ -29,7 +29,7 @@ use Digest::SHA qw(sha1_hex);
 
 our (%defs, %attr, $readingFnAttributes, $init_done);
 
-my $PRESENCE_SIM_VERSION = '1.1.9';
+my $PRESENCE_SIM_VERSION = '1.1.10';
 my $PRESENCE_SIM_SCHEMA  = 3;
 my $PRESENCE_SIM_MAX_DURATION_MINUTES = 1440;
 my $PRESENCE_SIM_OFF_MAX_ATTEMPTS = 3;
@@ -815,6 +815,10 @@ sub PresenceSimulation_SwitchOffManagedDevices {
 
     for my $dev (sort keys %{$managed}) {
         my $entry = PresenceSimulation_AsHash($managed->{$dev});
+        if (PresenceSimulation_IsTemporaryOffFailedCompatibilityEntry($entry)) {
+            PresenceSimulation_ReleaseManagedOffFailure($hash, $dev, $entry);
+            next;
+        }
         my $cfg = PresenceSimulation_ConfigForManagedEntry($data, $dev, $entry);
         if (!$cfg) {
             push @errors, "cannot determine off command for managed device $dev";
@@ -823,8 +827,7 @@ sub PresenceSimulation_SwitchOffManagedDevices {
 
         $entry->{stopping} = 1;
         $entry->{offRetryDue} = $now
-            if !$entry->{offFailed}
-            && int($entry->{offAttempts} // 0) < $PRESENCE_SIM_OFF_MAX_ATTEMPTS;
+            if int($entry->{offAttempts} // 0) < $PRESENCE_SIM_OFF_MAX_ATTEMPTS;
         my $status = PresenceSimulation_ProcessManagedOffEntry(
             $hash, $dev, $entry, $cfg, $now
         );
@@ -963,7 +966,7 @@ sub PresenceSimulation_Set {
     my $name = shift @a;
     my $cmd  = shift @a;
     my $list = 'mode:training,playback,dryrun,off save:noArg rebuildModel:noArg importDbLog '
-        . 'retryOff forceReleaseManaged resetTrainingData:confirm';
+        . 'resetTrainingData:confirm';
 
     if ($cmd eq 'mode') {
         return 'Usage: set <name> mode training|playback|dryrun|off' if @a != 1;
@@ -993,50 +996,6 @@ sub PresenceSimulation_Set {
 
         my $dbLogName = AttrVal($name, 'dbLogDevice', '');
         return PresenceSimulation_StartDbLogImport($hash, $dbLogName, $days, 'manual');
-    }
-
-    if ($cmd eq 'retryOff') {
-        return 'Usage: set <name> retryOff <device>' if @a != 1;
-        my $dev = $a[0];
-        my $data = PresenceSimulation_AsHash($PresenceSimulation_DATA{$name});
-        my $entry = PresenceSimulation_AsHash($data->{state}{managed}{$dev});
-        return "Device $dev is not managed by playback" if !%{$entry};
-        my $cfg = PresenceSimulation_ConfigForManagedEntry($data, $dev, $entry);
-        return "Cannot retry OFF for $dev: missing device configuration snapshot" if !$cfg;
-
-        $entry->{stopping} = 1;
-        $entry->{offAttempts} = 0;
-        $entry->{offRetryDue} = CORE::time();
-        $entry->{offFailed} = 0;
-        $entry->{offLastError} = '';
-        PresenceSimulation_MarkDirty($hash, 'state');
-        PresenceSimulation_ProcessManagedOffEntry(
-            $hash, $dev, $entry, $cfg, CORE::time()
-        );
-        PresenceSimulation_UpdateReadings($hash);
-        return;
-    }
-
-    if ($cmd eq 'forceReleaseManaged') {
-        return 'Usage: set <name> forceReleaseManaged <device> confirm'
-            if @a != 2 || $a[1] ne 'confirm';
-        my $dev = $a[0];
-        my $data = PresenceSimulation_AsHash($PresenceSimulation_DATA{$name});
-        return 'forceReleaseManaged is allowed only while mode is off'
-            if ($data->{state}{mode} // 'off') ne 'off';
-        return "Device $dev is not managed by playback"
-            if !exists $data->{state}{managed}{$dev};
-
-        delete $data->{state}{managed}{$dev};
-        delete $data->{state}{expected}{$dev};
-        PresenceSimulation_ClearPlaybackErrorIfResolved($hash, $data);
-        PresenceSimulation_MarkDirty($hash, 'state');
-        PresenceSimulation_UpdateReadings($hash);
-        PresenceSimulation_Log(
-            $hash, 2,
-            "force-released managed device $dev without confirmed OFF state"
-        );
-        return;
     }
 
     if ($cmd eq 'resetTrainingData') {
@@ -2707,7 +2666,7 @@ sub PresenceSimulation_ProcessPlaybackTransition {
     if ($expected && $expected->{until} >= $now && $expected->{state} eq $state) {
         delete $data->{state}{expected}{$dev};
         delete $data->{state}{managed}{$dev} if $state eq 'off';
-        PresenceSimulation_ClearPlaybackErrorIfResolved($hash, $data) if $state eq 'off';
+        PresenceSimulation_ClearPlaybackErrorAfterConfirmedOff($hash) if $state eq 'off';
         PresenceSimulation_Log($hash, 4, "playback feedback received: $dev -> $state");
         PresenceSimulation_MarkDirty($hash, 'state');
         PresenceSimulation_UpdateReadings($hash);
@@ -2718,7 +2677,7 @@ sub PresenceSimulation_ProcessPlaybackTransition {
 
     if ($state eq 'off') {
         my $wasManaged = delete $data->{state}{managed}{$dev};
-        PresenceSimulation_ClearPlaybackErrorIfResolved($hash, $data) if $wasManaged;
+        PresenceSimulation_ClearPlaybackErrorAfterConfirmedOff($hash) if $wasManaged;
         my $lockMinutes = AttrVal($name, 'manualLockMinutes', 120);
         $data->{state}{manualLockUntil}{$dev} = $now + ($lockMinutes * 60) if $lockMinutes > 0;
         PresenceSimulation_Log(
@@ -2740,19 +2699,48 @@ sub PresenceSimulation_ProcessPlaybackTransition {
     return;
 }
 
-# Returns true if at least one managed device has exhausted its OFF retries.
-sub PresenceSimulation_HasFailedManagedOff {
-    my ($data) = @_;
-    for my $entry (values %{PresenceSimulation_AsHash($data->{state}{managed})}) {
-        return 1 if PresenceSimulation_AsHash($entry)->{offFailed};
-    }
-    return 0;
+# TEMPORARY schema-3 compatibility, tracked by GitHub issue #9.
+# Version 1.1.9 may have persisted managed entries with offFailed=1; the current
+# runtime never creates that value. Remove this helper, all callers, the optional
+# validation, and the matching tests/documentation after the transition window.
+sub PresenceSimulation_IsTemporaryOffFailedCompatibilityEntry {
+    my ($entry) = @_;
+    return PresenceSimulation_AsHash($entry)->{offFailed} ? 1 : 0;
 }
 
-# Clears a playback error only after no managed OFF failure remains.
-sub PresenceSimulation_ClearPlaybackErrorIfResolved {
-    my ($hash, $data) = @_;
-    return if PresenceSimulation_HasFailedManagedOff($data);
+# Reports an exhausted OFF cycle and ends module ownership without treating the
+# physical device state as off. Future playback still requires an unambiguous
+# observed OFF state before another ON command may be sent.
+sub PresenceSimulation_ReleaseManagedOffFailure {
+    my ($hash, $dev, $entry) = @_;
+    my $name = $hash->{NAME};
+    my $data = PresenceSimulation_AsHash($PresenceSimulation_DATA{$name});
+    my $attempts = int(PresenceSimulation_AsHash($entry)->{offAttempts} // 0);
+    $attempts = $PRESENCE_SIM_OFF_MAX_ATTEMPTS if $attempts < 1;
+    my $message = "$dev did not confirm off after $attempts attempts";
+
+    delete $data->{state}{managed}{$dev};
+    delete $data->{state}{expected}{$dev};
+    PresenceSimulation_SetError($hash, $message, 'playback');
+    PresenceSimulation_Log(
+        $hash, 2,
+        $message
+            . '; released from playback management; '
+            . 'no further automatic OFF commands will be sent'
+    );
+    PresenceSimulation_MarkDirty($hash, 'state');
+    return 'failed';
+}
+
+# Clears transient playback errors after a confirmed OFF, but preserves the
+# final diagnostic from an exhausted OFF cycle until a later successful ON or
+# another subsystem error supersedes it.
+sub PresenceSimulation_ClearPlaybackErrorAfterConfirmedOff {
+    my ($hash) = @_;
+    my $name = $hash->{NAME};
+    return if ReadingsVal($name, 'lastErrorSource', '') ne 'playback';
+    return if ReadingsVal($name, 'lastError', '')
+        =~ / did not confirm off after \d+ attempts$/;
     PresenceSimulation_ClearError($hash, 'playback');
     return;
 }
@@ -2762,7 +2750,10 @@ sub PresenceSimulation_ProcessManagedOffEntry {
     my ($hash, $dev, $entry, $cfg, $now) = @_;
     my $name = $hash->{NAME};
     my $data = PresenceSimulation_AsHash($PresenceSimulation_DATA{$name});
-    return 'missing' if ref $entry ne 'HASH' || ref $cfg ne 'HASH';
+    return 'missing' if ref $entry ne 'HASH';
+    return PresenceSimulation_ReleaseManagedOffFailure($hash, $dev, $entry)
+        if PresenceSimulation_IsTemporaryOffFailedCompatibilityEntry($entry);
+    return 'missing' if ref $cfg ne 'HASH';
 
     $entry->{stopping} = 1;
 
@@ -2771,26 +2762,17 @@ sub PresenceSimulation_ProcessManagedOffEntry {
     if (defined $actual && $actual eq 'off') {
         delete $data->{state}{managed}{$dev};
         delete $data->{state}{expected}{$dev};
-        PresenceSimulation_ClearPlaybackErrorIfResolved($hash, $data);
+        PresenceSimulation_ClearPlaybackErrorAfterConfirmedOff($hash);
         PresenceSimulation_Log($hash, 3, "playback stop confirmed: $dev is off");
         PresenceSimulation_MarkDirty($hash, 'state');
         return 'confirmed';
     }
 
-    return 'failed' if $entry->{offFailed};
     return 'waiting' if ($entry->{offRetryDue} // 0) > $now;
 
     my $attempts = int($entry->{offAttempts} // 0);
     if ($attempts >= $PRESENCE_SIM_OFF_MAX_ATTEMPTS) {
-        my $message =
-            "$dev did not confirm off after $PRESENCE_SIM_OFF_MAX_ATTEMPTS attempts";
-        $entry->{offFailed} = 1;
-        $entry->{offLastError} = $message;
-        delete $data->{state}{expected}{$dev};
-        PresenceSimulation_SetError($hash, $message, 'playback');
-        PresenceSimulation_Log($hash, 2, $message . '; no further automatic OFF commands will be sent');
-        PresenceSimulation_MarkDirty($hash, 'state');
-        return 'failed';
+        return PresenceSimulation_ReleaseManagedOffFailure($hash, $dev, $entry);
     }
 
     $attempts++;
@@ -2846,6 +2828,10 @@ sub PresenceSimulation_ProcessPendingPlaybackStops {
     for my $dev (sort keys %{$managed}) {
         my $entry = PresenceSimulation_AsHash($managed->{$dev});
         next if !$entry->{stopping};
+        if (PresenceSimulation_IsTemporaryOffFailedCompatibilityEntry($entry)) {
+            PresenceSimulation_ReleaseManagedOffFailure($hash, $dev, $entry);
+            next;
+        }
         my $cfg = PresenceSimulation_ConfigForManagedEntry($data, $dev, $entry);
         if (!$cfg) {
             PresenceSimulation_SetError(
@@ -3208,7 +3194,7 @@ sub PresenceSimulation_RunSimulation {
             if (defined $actual && $actual eq 'off') {
                 delete $data->{state}{managed}{$dev};
                 delete $data->{state}{expected}{$dev};
-                PresenceSimulation_ClearPlaybackErrorIfResolved($hash, $data);
+                PresenceSimulation_ClearPlaybackErrorAfterConfirmedOff($hash);
                 PresenceSimulation_Log($hash, 3, "managed device already off: $dev removed from playback state");
                 PresenceSimulation_MarkDirty($hash, 'state');
                 next;
@@ -3942,7 +3928,6 @@ sub PresenceSimulation_ReconcileRuntimeState {
     my $data = $PresenceSimulation_DATA{$name};
     my @warnings;
     my $changed = 0;
-    my $resolvedManagedOff = 0;
 
     for my $dev (keys %{$data->{state}{activeSessions}}) {
         my $cfg = $data->{config}{byDevice}{$dev};
@@ -3966,6 +3951,11 @@ sub PresenceSimulation_ReconcileRuntimeState {
 
     for my $dev (keys %{$data->{state}{managed}}) {
         my $entry = PresenceSimulation_AsHash($data->{state}{managed}{$dev});
+        if (PresenceSimulation_IsTemporaryOffFailedCompatibilityEntry($entry)) {
+            PresenceSimulation_ReleaseManagedOffFailure($hash, $dev, $entry);
+            $changed = 1;
+            next;
+        }
         my $cfg = PresenceSimulation_ConfigForManagedEntry($data, $dev, $entry);
         if (!$cfg) {
             push @warnings, "cannot reconcile managed device $dev: missing configuration snapshot";
@@ -3976,7 +3966,7 @@ sub PresenceSimulation_ReconcileRuntimeState {
         if (defined $state && $state eq 'off') {
             delete $data->{state}{managed}{$dev};
             $changed = 1;
-            $resolvedManagedOff = 1;
+            PresenceSimulation_ClearPlaybackErrorAfterConfirmedOff($hash);
             PresenceSimulation_Log($hash, 4, "removed stale playback state for $dev: current state is off");
         }
         elsif (!defined $state) {
@@ -3993,7 +3983,6 @@ sub PresenceSimulation_ReconcileRuntimeState {
     }
 
     PresenceSimulation_MarkDirty($hash, 'state') if $changed;
-    PresenceSimulation_ClearPlaybackErrorIfResolved($hash, $data) if $resolvedManagedOff;
     if (@warnings) {
         PresenceSimulation_SetError($hash, join('; ', @warnings), 'runtime');
     }
@@ -4537,6 +4526,8 @@ sub PresenceSimulation_ValidatePersistedData {
             return (undef, "state.managed.$dev.onPattern is not a valid regular expression") if $@;
             eval { qr/$entry->{offPattern}/ };
             return (undef, "state.managed.$dev.offPattern is not a valid regular expression") if $@;
+            # TEMPORARY COMPATIBILITY (#9): offFailed remains accepted only for
+            # schema-3 state written before automatic release was introduced.
             for my $flag (qw(stopping offEventEmitted offFailed)) {
                 next if !exists $entry->{$flag};
                 return (undef, "state.managed.$dev.$flag must be 0 or 1")
@@ -5115,12 +5106,6 @@ optional.</p>
       sessions are assigned to the logical <code>device</code>. Database credentials
       are passed to the worker through a randomized mode-0600 parameter file and are
       not included in the visible <code>BlockingCall</code> argument.</li>
-  <li><code>retryOff &lt;device&gt;</code><br>Explicitly starts a new bounded OFF
-      attempt cycle for one playback-managed device after automatic retries have
-      been exhausted.</li>
-  <li><code>forceReleaseManaged &lt;device&gt; confirm</code><br>Removes one
-      unresolved managed device without claiming that it is physically off. This
-      emergency command is available only in <code>mode=off</code>.</li>
   <li><code>resetTrainingData confirm</code><br>Deletes all collected and imported
       training data and rebuilds an empty model.</li>
 </ul>
@@ -5268,8 +5253,8 @@ time block. It does not preserve the complete daily number or sequence of sessio
   <li><code>state</code>, <code>mode</code>: current operating mode.</li>
   <li><code>activeTraining</code>: currently open real training sessions.</li>
   <li><code>activePlayback</code>: devices currently managed by real playback.</li>
-  <li><code>stoppingPlayback</code>: devices whose OFF state is not yet confirmed,
-      including devices whose bounded retries have been exhausted.</li>
+  <li><code>stoppingPlayback</code>: devices currently waiting for OFF confirmation
+      or another bounded automatic OFF attempt.</li>
   <li><code>activeDryRun</code>: currently active virtual sessions.</li>
   <li><code>simulationEvent</code>: event-generating on, off, or blocked action from
       dry-run or real playback. The value contains a <code>mode=</code> field. Planned
@@ -5317,10 +5302,11 @@ time block. It does not preserve the complete daily number or sequence of sessio
   <li>An unresolved OFF request is attempted at most three times: immediately,
       after one minute, and after another five minutes. If OFF is still not
       confirmed after the final grace period, no further automatic command is
-      sent. Managed ownership and <code>stoppingPlayback</code> remain active, and
-      the error is reported through <code>lastError</code> with source
-      <code>playback</code>. A later OFF reading resolves the state automatically;
-      <code>retryOff</code> starts a new bounded cycle.</li>
+      sent and the device is released from playback management without claiming
+      that it is physically off. The failure remains visible through
+      <code>lastError</code> with source <code>playback</code> until a later successful
+      playback ON action clears it or another error supersedes it. Future playback
+      still sends ON only when the observed device state is unambiguously OFF.</li>
   <li>Changing <code>trainingSource</code> does not delete or hide retained raw
       data. In both modes, imported DbLog days and sufficiently covered event days
       remain eligible for the model. The currently configured <code>dbLogDevice</code>
@@ -5435,13 +5421,6 @@ optional.</p>
       Datenbank-Zugangsdaten werden dem Worker &uuml;ber eine zuf&auml;llig benannte
       Parameterdatei mit Rechten 0600 &uuml;bergeben und stehen nicht im sichtbaren
       <code>BlockingCall</code>-Argument.</li>
-  <li><code>retryOff &lt;Ger&auml;t&gt;</code><br>Startet nach ausgesch&ouml;pften
-      automatischen Versuchen ausdr&uuml;cklich einen neuen begrenzten
-      Ausschaltzyklus f&uuml;r ein vom Playback verwaltetes Ger&auml;t.</li>
-  <li><code>forceReleaseManaged &lt;Ger&auml;t&gt; confirm</code><br>Entfernt ein
-      ungekl&auml;rtes verwaltetes Ger&auml;t, ohne zu behaupten, dass es physisch
-      ausgeschaltet ist. Dieser Notfallbefehl ist nur in <code>mode=off</code>
-      verf&uuml;gbar.</li>
   <li><code>resetTrainingData confirm</code><br>L&ouml;scht alle gesammelten und
       importierten Trainingsdaten und erzeugt ein leeres Modell.</li>
 </ul>
@@ -5605,9 +5584,9 @@ wird dadurch nicht erhalten.</p>
   <li><code>state</code>, <code>mode</code>: aktuelle Betriebsart.</li>
   <li><code>activeTraining</code>: aktuell offene reale Trainingssitzungen.</li>
   <li><code>activePlayback</code>: aktuell vom echten Playback verwaltete Ger&auml;te.</li>
-  <li><code>stoppingPlayback</code>: Ger&auml;te, deren OFF-Zustand noch nicht
-      best&auml;tigt ist, einschlie&szlig;lich Ger&auml;ten mit ausgesch&ouml;pften
-      begrenzten Wiederholungen.</li>
+  <li><code>stoppingPlayback</code>: Ger&auml;te, die aktuell auf eine
+      OFF-Best&auml;tigung oder einen weiteren begrenzten automatischen
+      OFF-Versuch warten.</li>
   <li><code>activeDryRun</code>: aktuell aktive virtuelle Sitzungen.</li>
   <li><code>simulationEvent</code>: Event erzeugende Aktion on, off oder blocked aus
       Dry Run oder echtem Playback. Der Wert enth&auml;lt ein <code>mode=</code>-Feld.
@@ -5658,11 +5637,12 @@ wird dadurch nicht erhalten.</p>
   <li>Ein ungekl&auml;rter OFF-Befehl wird h&ouml;chstens dreimal versucht: sofort,
       nach einer Minute und nach weiteren f&uuml;nf Minuten. Bleibt die
       OFF-R&uuml;ckmeldung auch nach der letzten Best&auml;tigungsfrist aus, werden
-      keine weiteren automatischen Befehle gesendet. Verwaltung und
-      <code>stoppingPlayback</code> bleiben aktiv; der Fehler erscheint in
-      <code>lastError</code> mit Quelle <code>playback</code>. Eine sp&auml;tere
-      OFF-R&uuml;ckmeldung l&ouml;st den Zustand automatisch auf; <code>retryOff</code>
-      startet einen neuen begrenzten Zyklus.</li>
+      keine weiteren automatischen Befehle gesendet und das Ger&auml;t wird aus der
+      Playback-Verwaltung entlassen, ohne es als physisch ausgeschaltet zu behandeln.
+      Der Fehler bleibt in <code>lastError</code> mit Quelle <code>playback</code>
+      sichtbar, bis eine sp&auml;tere erfolgreiche Playback-ON-Aktion ihn l&ouml;scht oder
+      ein anderer Fehler ihn ersetzt. Auch k&uuml;nftiges Playback sendet ON nur bei
+      einem eindeutig erkannten OFF-Zustand.</li>
   <li>Eine &Auml;nderung von <code>trainingSource</code> l&ouml;scht oder verbirgt keine
       gespeicherten Rohdaten. In beiden Modi bleiben importierte DbLog-Tage und
       ausreichend erfasste Event-Tage f&uuml;r das Modell nutzbar. Das aktuell
@@ -5689,8 +5669,8 @@ wird dadurch nicht erhalten.</p>
   "name": "FHEM-PresenceSimulation",
   "abstract": "Learns device switching behaviour and simulates presence",
   "description": "A rolling FHEM presence simulation based on historical device switching sessions. Retained event and DbLog days share one model while trainingSource controls ongoing acquisition and automatic imports. Command targets can use separate observation devices for live feedback and DbLog history. Bounded OFF retries and hardened nonblocking DbLog workers improve runtime safety. It supports switchable generic inline event handlers, real playback, dry-run events, weekday models, and blocking conditions.",
-  "version": "v1.1.9",
-  "x_release_date": "2026-06-27",
+  "version": "v1.1.10",
+  "x_release_date": "2026-06-28",
   "release_status": "testing",
   "license": [
     "gpl_2"

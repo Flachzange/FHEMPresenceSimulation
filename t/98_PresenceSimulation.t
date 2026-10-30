@@ -1751,7 +1751,7 @@ sub raw_day {
         = (1, 3, 1, 100, 'off not confirmed');
     ($validated, $error) = PresenceSimulation_ValidatePersistedData($hash, 'state', $state);
     ok($validated && !defined $error,
-        'managed playback state accepts persisted bounded OFF retry metadata');
+        'temporary issue-#9 compatibility accepts persisted bounded OFF retry metadata');
     $state->{managed}{DeviceA}{offAttempts} = -1;
     ($validated, $error) = PresenceSimulation_ValidatePersistedData($hash, 'state', $state);
     like($error, qr/offAttempts must be a non-negative integer/,
@@ -1800,7 +1800,7 @@ sub raw_day {
 
 
 {
-    my $name = 'RestartResolvesFailedOff';
+    my $name = 'RestartReleasesFailedOff';
     my $hash = make_instance($name);
     my $dev = 'RestartOffDevice';
     my $cfg = {
@@ -1819,13 +1819,15 @@ sub raw_day {
         offCommand => 'off', stopping => 1, offAttempts => 3,
         offFailed => 1, offLastError => 'not confirmed',
     };
-    $TEST_READINGS{$dev}{state} = 'off';
+    $TEST_READINGS{$dev}{state} = 'on';
     PresenceSimulation_SetError($hash, "$dev did not confirm off after 3 attempts", 'playback');
     PresenceSimulation_ReconcileRuntimeState($hash);
     ok(!exists $PresenceSimulation_DATA{$name}{state}{managed}{$dev},
-        'restart reconciliation releases a failed managed entry that is now definitely off');
-    is($TEST_READINGS{$name}{lastError}, 'none',
-        'restart reconciliation clears the resolved playback error');
+        'temporary issue-#9 compatibility releases a persisted failed managed entry');
+    is($TEST_READINGS{$name}{lastError}, "$dev did not confirm off after 3 attempts",
+        'restart reconciliation preserves the final playback error after release');
+    is($TEST_READINGS{$name}{lastErrorSource}, 'playback',
+        'restart reconciliation keeps the playback error source');
 }
 
 {
@@ -2121,53 +2123,126 @@ sub raw_day {
     is(scalar(grep { $_ eq "$dev off" } @TEST_COMMANDS), 3,
         'managed OFF is sent at most three times');
     is($entry->{offAttempts}, 3,
-        'managed state persists the number of OFF attempts');
-    is($entry->{offFailed}, 1,
-        'missing OFF confirmation enters a persistent failed state');
+        'the detached attempt record shows all three OFF attempts');
+    ok(!exists $PresenceSimulation_DATA{$name}{state}{managed}{$dev},
+        'missing OFF confirmation automatically releases managed ownership');
+    ok(!exists $PresenceSimulation_DATA{$name}{state}{expected}{$dev},
+        'automatic release also removes the expected OFF feedback entry');
     is($TEST_READINGS{$name}{lastErrorSource}, 'playback',
         'exhausted OFF retries use the existing playback error readings');
+    is($TEST_READINGS{$name}{lastError}, "$dev did not confirm off after 3 attempts",
+        'exhausted OFF retries identify the affected device and attempt count');
 
-    PresenceSimulation_ProcessManagedOffEntry($hash, $dev, $entry, $cfg, 5000);
+    PresenceSimulation_ProcessPendingPlaybackStops($hash, 5000);
     is(scalar(grep { $_ eq "$dev off" } @TEST_COMMANDS), 3,
-        'failed managed OFF state sends no further automatic commands');
+        'released OFF failure sends no further automatic commands');
 
     PresenceSimulation_UpdateReadings($hash);
-    is($TEST_READINGS{$name}{stoppingPlayback}, 1,
-        'stoppingPlayback remains non-zero while OFF is unresolved');
-
-    PresenceSimulation_Set($hash, $name, 'retryOff', $dev);
-    is($entry->{offFailed}, 0,
-        'retryOff explicitly leaves the failed state');
-    is($entry->{offAttempts}, 1,
-        'retryOff starts a new bounded attempt cycle');
-    is(scalar(grep { $_ eq "$dev off" } @TEST_COMMANDS), 4,
-        'retryOff sends exactly one immediate new OFF attempt');
-
-    $TEST_READINGS{$dev}{state} = 'off';
-    PresenceSimulation_ProcessManagedOffEntry($hash, $dev, $entry, $cfg, 5001);
-    ok(!exists $PresenceSimulation_DATA{$name}{state}{managed}{$dev},
-        'a later confirmed OFF releases managed ownership');
-    is($TEST_READINGS{$name}{lastError}, 'none',
-        'a resolved OFF failure clears the existing playback error');
+    is($TEST_READINGS{$name}{stoppingPlayback}, 0,
+        'stoppingPlayback excludes an exhausted automatically released device');
+    is($TEST_READINGS{$name}{activePlayback}, 0,
+        'activePlayback excludes an exhausted automatically released device');
+    is($TEST_READINGS{$name}{lastError}, "$dev did not confirm off after 3 attempts",
+        'automatic release does not silently clear the final playback error');
+    is(PresenceSimulation_Attr('set', $name, 'binMinutes', '15'), undef,
+        'playback-sensitive configuration is no longer blocked after automatic release');
 }
 
 {
-    my $name = 'ForceReleaseManaged';
+    my $name = 'RemovedOffRecoveryCommands';
     my $hash = make_instance($name);
-    $PresenceSimulation_DATA{$name}{state}{mode} = 'off';
-    $PresenceSimulation_DATA{$name}{state}{managed}{StaleDevice} = {
-        startedAt => 1, offDue => 2, durationMinutes => 1,
-        bin => 0, weekday => 1, modelType => 'all-days',
-        reading => 'state', onPattern => '^on$', offPattern => '^off$', offCommand => 'off',
-        stopping => 1, offAttempts => 3, offFailed => 1, offLastError => 'not confirmed',
-    };
-    is(
-        PresenceSimulation_Set($hash, $name, 'forceReleaseManaged', 'StaleDevice', 'confirm'),
-        undef,
-        'forceReleaseManaged is available as an explicit recovery command in mode off',
+    my $retry = PresenceSimulation_Set($hash, $name, 'retryOff', 'StaleDevice');
+    like($retry, qr/^Unknown argument retryOff, choose one of /,
+        'retryOff is no longer accepted as a set command');
+    unlike($retry, qr/choose one of .*\bretryOff\b/,
+        'the set command list does not advertise retryOff');
+
+    my $release = PresenceSimulation_Set(
+        $hash, $name, 'forceReleaseManaged', 'StaleDevice', 'confirm'
     );
-    ok(!exists $PresenceSimulation_DATA{$name}{state}{managed}{StaleDevice},
-        'forceReleaseManaged removes only the selected managed entry');
+    like($release, qr/^Unknown argument forceReleaseManaged, choose one of /,
+        'forceReleaseManaged is no longer accepted as a set command');
+    unlike($release, qr/choose one of .*forceReleaseManaged/,
+        'the set command list does not advertise forceReleaseManaged');
+}
+
+{
+    my $name = 'ConfirmedOffErrorLifecycle';
+    my $hash = make_instance($name);
+    my $dev = 'ConfirmedOffDevice';
+    my $cfg = {
+        device => $dev, readingDevice => $dev, reading => 'state',
+        onPattern => '^on$', offPattern => '^off$',
+        onRe => qr/^on$/, offRe => qr/^off$/, offCommand => 'off',
+    };
+    my $entry = {
+        offDue => 100, durationMinutes => 1, modelType => 'all-days',
+        readingDevice => $dev, reading => 'state',
+        onPattern => '^on$', offPattern => '^off$', offCommand => 'off',
+        stopping => 1, offAttempts => 1, offFailed => 0,
+        offLastError => "$dev off attempt 1 failed: temporary error",
+    };
+    $PresenceSimulation_DATA{$name}{state}{managed}{$dev} = $entry;
+    $TEST_READINGS{$dev}{state} = 'off';
+    PresenceSimulation_SetError($hash, $entry->{offLastError}, 'playback');
+    PresenceSimulation_ProcessManagedOffEntry($hash, $dev, $entry, $cfg, 1000);
+    is($TEST_READINGS{$name}{lastError}, 'none',
+        'confirmed OFF still clears a transient playback command error');
+
+    $PresenceSimulation_DATA{$name}{state}{managed}{$dev} = $entry;
+    PresenceSimulation_SetError($hash, 'EarlierDevice did not confirm off after 3 attempts', 'playback');
+    PresenceSimulation_ProcessManagedOffEntry($hash, $dev, $entry, $cfg, 1001);
+    is($TEST_READINGS{$name}{lastError}, 'EarlierDevice did not confirm off after 3 attempts',
+        'confirmed OFF for another device preserves an exhausted-cycle diagnostic');
+}
+
+{
+    my $name = 'PlaybackAfterAutomaticOffRelease';
+    my $hash = make_instance($name);
+    my $dev = 'ReleasedDevice';
+    my $date = PresenceSimulation_Date(CORE::time());
+    my $at1000 = PresenceSimulation_EpochFromDateTime("$date 10:00:00");
+    my $cfg = {
+        device => $dev, readingDevice => $dev, reading => 'state',
+        onPattern => '^on$', offPattern => '^off$',
+        onRe => qr/^on$/, offRe => qr/^off$/,
+        onCommand => 'on', offCommand => 'off', blocks => [],
+    };
+    $PresenceSimulation_DATA{$name}{config} = {
+        order => [$dev], byDevice => { $dev => $cfg },
+        globalBlocks => [], ready => 1,
+    };
+    $PresenceSimulation_DATA{$name}{model} = {
+        binMinutes => 15,
+        allDays => { validDates => ['2026-06-01'], devices => {} },
+        weekdays => {},
+    };
+    $PresenceSimulation_DATA{$name}{state}{plannedBins}{$date}{$dev}{40} = {
+        plannedStartMinute => 600, durationMinutes => 5,
+        probabilityHistorical => 0.5, probabilityEffective => 0.5,
+        probabilityFactor => 1, historyStarts => 2, historyDays => 4,
+        historyPositionSamples => 2, modelType => 'all-days',
+        createdAt => CORE::time(),
+    };
+    PresenceSimulation_SetError($hash, "$dev did not confirm off after 3 attempts", 'playback');
+    @TEST_COMMANDS = ();
+
+    $TEST_READINGS{$dev}{state} = 'on';
+    PresenceSimulation_RunPlayback($hash, $at1000, $date);
+    is_deeply(\@TEST_COMMANDS, [],
+        'future playback sends no ON while an automatically released device still reports on');
+
+    delete $TEST_READINGS{$dev}{state};
+    PresenceSimulation_RunPlayback($hash, $at1000 + 60, $date);
+    is_deeply(\@TEST_COMMANDS, [],
+        'future playback sends no ON while an automatically released device state is unknown');
+
+    $TEST_READINGS{$dev}{state} = 'off';
+    PresenceSimulation_RunPlayback($hash, $at1000 + 120, $date);
+    is_deeply(\@TEST_COMMANDS, ["$dev on"],
+        'future playback resumes once the automatically released device is unambiguously off');
+    is($TEST_READINGS{$name}{lastError}, 'none',
+        'a later successful playback ON clears the retained playback error');
 }
 
 {
@@ -2397,8 +2472,8 @@ sub raw_day {
         'former commandref anchors are absent');
     ok(index($source, 'raw   => "$dir/PresenceSimulation_Raw_$safe.json"') >= 0,
         'raw persistence uses the PresenceSimulation prefix');
-    like($source, qr/my \$PRESENCE_SIM_VERSION = '1\.1\.9'/,
-        'module version is 1.1.9');
+    like($source, qr/my \$PRESENCE_SIM_VERSION = '1\.1\.10'/,
+        'module version is 1.1.10');
     like($source, qr/^# Copyright \(C\) 2026 Flachzange$/m,
         'source copyright holder is Flachzange');
     unlike($source, qr/Christoph Evers/,
@@ -2491,6 +2566,14 @@ sub raw_day {
         'English commandref documents bounded OFF retries');
     like($source, qr/h&ouml;chstens dreimal versucht: sofort/,
         'German commandref documents bounded OFF retries');
+    unlike($source, qr/<code>retryOff /,
+        'commandref no longer documents the removed retryOff command');
+    unlike($source, qr/<code>forceReleaseManaged /,
+        'commandref no longer documents the removed forceReleaseManaged command');
+    like($source, qr/released from playback management/,
+        'English commandref documents automatic release after exhausted OFF retries');
+    like($source, qr/aus der\s+Playback-Verwaltung entlassen/s,
+        'German commandref documents automatic release after exhausted OFF retries');
     like($source, qr/maxDuration<\/code>\s+must be between .*?1440 minutes/s,
         'English commandref documents the maxDuration upper limit');
     like($source, qr/maxDuration<\/code>\s+muss zwischen .*?1440\s+Minuten/s,
@@ -2520,7 +2603,7 @@ sub raw_day {
     my $meta = eval { JSON::PP->new->decode($meta_text) };
     ok(!$@ && ref $meta eq 'HASH', 'embedded META.json is valid JSON');
     is($meta->{name}, 'FHEM-PresenceSimulation', 'META name matches the new module type');
-    is($meta->{version}, 'v1.1.9', 'META version matches module version');
+    is($meta->{version}, 'v1.1.10', 'META version matches module version');
     ok(exists $meta->{prereqs}{runtime}{requires}{'File::Spec'},
         'META declares the File::Spec runtime prerequisite');
     is_deeply($meta->{author}, ['Flachzange <>'],
