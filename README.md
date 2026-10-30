@@ -24,10 +24,10 @@ defmod PresenceSimulation PresenceSimulation
 
 A new instance starts safely in `mode=off` and requires at least one valid `deviceNN` attribute.
 
-Version 1.1.10 simplifies failed OFF handling. After the existing bounded retry
-cycle is exhausted, the module reports the playback error and automatically releases
-the device from managed state instead of requiring a recovery command. Persistence
-schema 3 remains unchanged.
+Version 1.1.11 keeps a module-owned playback session active until its configured ON
+state has been observed once. A separate, slow-starting `readingDevice` may therefore
+continue to report OFF during startup without discarding the planned OFF command.
+Persistence schema 3 remains unchanged.
 
 FHEMWEB uses a module-owned default state-icon mapping without creating an
 attribute:
@@ -164,6 +164,18 @@ set PresenceSimulation mode off
 
 Wait until `stoppingPlayback` is `0` before changing device or model attributes.
 
+After PresenceSimulation sends an ON command, an observed OFF state is ignored until
+the configured ON state has been seen once. The first ON observation confirms the
+managed start. A later OFF observation is then handled as before as an early/manual
+shutdown. The planned end time is not extended while confirmation is pending, and the
+configured OFF command is still attempted at that time even if ON was never confirmed.
+This is especially relevant when `device` and `readingDevice` are different and the
+observation source needs time to start.
+
+Once a module-owned OFF command has been sent successfully, an observed OFF can
+confirm that stop even if ON was never observed. If the bounded OFF cycle fails,
+automatic release and retained failure diagnostics also apply to unconfirmed starts.
+
 An unresolved OFF state is attempted at most three times: immediately, after one
 minute, and after another five minutes. If the state is still not confirmed after
 the final grace period, PresenceSimulation sends no more automatic OFF commands and
@@ -231,7 +243,7 @@ scripts/build-release.sh
 
 Generated files are written to `dist/`. GitHub Actions runs the same checks for every
 push and pull request. A tag matching the embedded module version, for example
-`v1.1.10`, builds the release and publishes the verified artifacts through GitHub
+`v1.1.11`, builds the release and publishes the verified artifacts through GitHub
 Releases.
 
 Reusable FHEM engineering instructions are maintained in [AGENTS.md](AGENTS.md);

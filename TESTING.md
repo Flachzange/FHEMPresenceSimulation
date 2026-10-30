@@ -1,6 +1,6 @@
-# Testing PresenceSimulation 1.1.10
+# Testing PresenceSimulation 1.1.11
 
-Expected self-test result for this release: **391/391 PASS**.
+Expected self-test result for this release: **437/437 PASS**.
 
 ## Automated checks
 
@@ -11,7 +11,7 @@ perl -I t/lib -c 98_PresenceSimulation.pm
 PERL5LIB=t/lib prove -v t/98_PresenceSimulation.t
 ```
 
-The 391 self-tests use small FHEM stubs and cover parsing, exact day-based model
+The 437 self-tests use small FHEM stubs and cover parsing, exact day-based model
 probabilities, historical start positions, one-time block decisions, persisted
 pending plans, factor-adjusted diagnostics, mixed event/DbLog history, manual
 imports, event handlers, persistence, backups, permissions, lifecycle cleanup,
@@ -106,7 +106,30 @@ FHEMWEB icon default.
 
 A real FHEM/DbLog integration test is still required before changing the release status from `testing`/`experimental`.
 
-## 1.1.10 focused checks
+## 1.1.11 focused checks
+
+- Configure a command device with a separate, slow-starting observation device. Start
+  playback while the observation reading still matches `offRegex`. Verify that the
+  session remains managed and that no manual lock is created.
+- Let the observation reading match `onRegex` later. Verify that the existing session
+  is confirmed and retains its original planned end time.
+- Switch the confirmed observation back to `offRegex` before the planned end. Verify
+  that the existing manual-intervention behavior still releases ownership and applies
+  `manualLockMinutes`.
+- Keep the observation source at `offRegex` for the complete session. Verify that the
+  configured OFF command is nevertheless sent at the planned end and that subsequent
+  OFF confirmation releases ownership.
+- Save and reload while the managed start is still unconfirmed. Verify that the state
+  remains managed while OFF is observed, becomes confirmed when ON appears, and is not
+  redrawn or duplicated.
+- Load an otherwise valid schema-3 state entry without `startConfirmed`. Verify that it
+  remains valid and keeps the previous already-confirmed behavior.
+- Never confirm ON, then suppress OFF feedback or reject each OFF command. Verify
+  that exactly three attempts occur, ownership remains until the final grace period
+  ends, and automatic release removes the session from both management readings.
+  The final error must survive a later confirmed OFF from another device.
+
+## 1.1.10 automatic failed-OFF release
 
 - Suppress OFF feedback and verify the unchanged timing: immediate attempt, retry
   after one minute, retry after another five minutes, and final failure after the

@@ -29,7 +29,7 @@ use Digest::SHA qw(sha1_hex);
 
 our (%defs, %attr, $readingFnAttributes, $init_done);
 
-my $PRESENCE_SIM_VERSION = '1.1.10';
+my $PRESENCE_SIM_VERSION = '1.1.11';
 my $PRESENCE_SIM_SCHEMA  = 3;
 my $PRESENCE_SIM_MAX_DURATION_MINUTES = 1440;
 my $PRESENCE_SIM_OFF_MAX_ATTEMPTS = 3;
@@ -2654,6 +2654,33 @@ sub PresenceSimulation_ProcessTrainingTransition {
     return;
 }
 
+# Treats older schema-3 managed entries without the optional marker as confirmed.
+sub PresenceSimulation_IsManagedStartConfirmed {
+    my ($entry) = @_;
+    return 1 if ref $entry ne 'HASH';
+    return exists $entry->{startConfirmed} ? ($entry->{startConfirmed} ? 1 : 0) : 1;
+}
+
+# Records the first observed ON state for a module-owned playback session.
+sub PresenceSimulation_ConfirmManagedStart {
+    my ($hash, $dev, $entry) = @_;
+    return 0 if ref $entry ne 'HASH';
+    return 0 if PresenceSimulation_IsManagedStartConfirmed($entry);
+
+    $entry->{startConfirmed} = 1;
+    PresenceSimulation_Log($hash, 4, "playback start confirmed: $dev is on");
+    PresenceSimulation_MarkDirty($hash, 'state');
+    return 1;
+}
+
+# An OFF observation can end an active session only after ON was confirmed.
+# A successfully sent module-owned OFF command also makes OFF authoritative.
+sub PresenceSimulation_CanAcceptManagedOff {
+    my ($entry) = @_;
+    return 1 if PresenceSimulation_IsManagedStartConfirmed($entry);
+    return PresenceSimulation_AsHash($entry)->{offEventEmitted} ? 1 : 0;
+}
+
 # Handles command feedback and manual interventions during playback.
 sub PresenceSimulation_ProcessPlaybackTransition {
     my ($hash, $cfg, $state) = @_;
@@ -2662,14 +2689,26 @@ sub PresenceSimulation_ProcessPlaybackTransition {
     my $dev  = $cfg->{device};
     my $now  = CORE::time();
 
+    my $managed = PresenceSimulation_AsHash($data->{state}{managed}{$dev});
     my $expected = $data->{state}{expected}{$dev};
     if ($expected && $expected->{until} >= $now && $expected->{state} eq $state) {
         delete $data->{state}{expected}{$dev};
+        PresenceSimulation_ConfirmManagedStart($hash, $dev, $managed)
+            if $state eq 'on' && %{$managed};
         delete $data->{state}{managed}{$dev} if $state eq 'off';
         PresenceSimulation_ClearPlaybackErrorAfterConfirmedOff($hash) if $state eq 'off';
         PresenceSimulation_Log($hash, 4, "playback feedback received: $dev -> $state");
         PresenceSimulation_MarkDirty($hash, 'state');
         PresenceSimulation_UpdateReadings($hash);
+        return;
+    }
+
+    if ($state eq 'off' && %{$managed}
+        && !PresenceSimulation_CanAcceptManagedOff($managed)) {
+        PresenceSimulation_Log(
+            $hash, 5,
+            "playback OFF ignored before initial ON confirmation: $dev remains managed"
+        );
         return;
     }
 
@@ -2688,7 +2727,11 @@ sub PresenceSimulation_ProcessPlaybackTransition {
         PresenceSimulation_UpdateReadings($hash);
     }
     elsif ($state eq 'on') {
-        if ($data->{state}{managed}{$dev}) {
+        if (%{$managed}) {
+            if (PresenceSimulation_ConfirmManagedStart($hash, $dev, $managed)) {
+                PresenceSimulation_UpdateReadings($hash);
+                return;
+            }
             PresenceSimulation_Log($hash, 3, "unexpected ON feedback during playback: $dev remains managed");
         }
         else {
@@ -2759,7 +2802,8 @@ sub PresenceSimulation_ProcessManagedOffEntry {
 
     my $value = PresenceSimulation_ObservedReadingValue($cfg);
     my $actual = defined $value ? PresenceSimulation_ClassifyValue($cfg, $value) : undef;
-    if (defined $actual && $actual eq 'off') {
+    if (defined $actual && $actual eq 'off'
+        && PresenceSimulation_CanAcceptManagedOff($entry)) {
         delete $data->{state}{managed}{$dev};
         delete $data->{state}{expected}{$dev};
         PresenceSimulation_ClearPlaybackErrorAfterConfirmedOff($hash);
@@ -3191,13 +3235,22 @@ sub PresenceSimulation_RunSimulation {
 
             my $value = PresenceSimulation_ObservedReadingValue($cfg);
             my $actual = defined $value ? PresenceSimulation_ClassifyValue($cfg, $value) : undef;
-            if (defined $actual && $actual eq 'off') {
-                delete $data->{state}{managed}{$dev};
-                delete $data->{state}{expected}{$dev};
-                PresenceSimulation_ClearPlaybackErrorAfterConfirmedOff($hash);
-                PresenceSimulation_Log($hash, 3, "managed device already off: $dev removed from playback state");
-                PresenceSimulation_MarkDirty($hash, 'state');
-                next;
+            if (defined $actual && $actual eq 'on') {
+                PresenceSimulation_ConfirmManagedStart($hash, $dev, $managed);
+            }
+            elsif (defined $actual && $actual eq 'off') {
+                if (PresenceSimulation_CanAcceptManagedOff($managed)) {
+                    delete $data->{state}{managed}{$dev};
+                    delete $data->{state}{expected}{$dev};
+                    PresenceSimulation_ClearPlaybackErrorAfterConfirmedOff($hash);
+                    PresenceSimulation_Log($hash, 3, "managed device already off: $dev removed from playback state");
+                    PresenceSimulation_MarkDirty($hash, 'state');
+                    next;
+                }
+                PresenceSimulation_Log(
+                    $hash, 5,
+                    "playback OFF ignored before initial ON confirmation: $dev remains managed"
+                );
             }
 
             if ($now >= $managed->{offDue}) {
@@ -3404,6 +3457,7 @@ sub PresenceSimulation_RunSimulation {
                 onPattern       => $cfg->{onPattern},
                 offPattern      => $cfg->{offPattern},
                 offCommand      => $cfg->{offCommand},
+                startConfirmed  => 0,
                 stopping        => 0,
                 offAttempts     => 0,
                 offFailed       => 0,
@@ -3963,11 +4017,22 @@ sub PresenceSimulation_ReconcileRuntimeState {
         }
         my $value = PresenceSimulation_ObservedReadingValue($cfg);
         my $state = defined $value ? PresenceSimulation_ClassifyValue($cfg, $value) : undef;
-        if (defined $state && $state eq 'off') {
-            delete $data->{state}{managed}{$dev};
-            $changed = 1;
-            PresenceSimulation_ClearPlaybackErrorAfterConfirmedOff($hash);
-            PresenceSimulation_Log($hash, 4, "removed stale playback state for $dev: current state is off");
+        if (defined $state && $state eq 'on') {
+            $changed = 1 if PresenceSimulation_ConfirmManagedStart($hash, $dev, $entry);
+        }
+        elsif (defined $state && $state eq 'off') {
+            if (PresenceSimulation_CanAcceptManagedOff($entry)) {
+                delete $data->{state}{managed}{$dev};
+                $changed = 1;
+                PresenceSimulation_ClearPlaybackErrorAfterConfirmedOff($hash);
+                PresenceSimulation_Log($hash, 4, "removed stale playback state for $dev: current state is off");
+            }
+            else {
+                PresenceSimulation_Log(
+                    $hash, 4,
+                    "retained unconfirmed playback state for $dev: current state is still off"
+                );
+            }
         }
         elsif (!defined $state) {
             push @warnings, "cannot determine current state of managed device $dev";
@@ -4528,7 +4593,7 @@ sub PresenceSimulation_ValidatePersistedData {
             return (undef, "state.managed.$dev.offPattern is not a valid regular expression") if $@;
             # TEMPORARY COMPATIBILITY (#9): offFailed remains accepted only for
             # schema-3 state written before automatic release was introduced.
-            for my $flag (qw(stopping offEventEmitted offFailed)) {
+            for my $flag (qw(startConfirmed stopping offEventEmitted offFailed)) {
                 next if !exists $entry->{$flag};
                 return (undef, "state.managed.$dev.$flag must be 0 or 1")
                     if !PresenceSimulation_IsIntegerInRange($entry->{$flag}, 0, 1);
@@ -5299,6 +5364,16 @@ time block. It does not preserve the complete daily number or sequence of sessio
 <h4>Notes</h4>
 <ul>
   <li>Changing device or model attributes while real playback owns devices is rejected. Set the module to <code>off</code> and wait until <code>stoppingPlayback</code> is 0 before changing those attributes.</li>
+  <li>After a module-owned ON command, an observed OFF state does not release the
+      managed session until the configured ON state has been observed once. The
+      first ON observation confirms the start; only a later OFF observation is
+      treated as an early/manual shutdown. The original planned end time remains
+      unchanged, and the configured OFF command is still attempted at that time
+      even when ON was never confirmed. After a successfully sent module-owned OFF
+      command, an observed OFF can confirm that stop without a prior ON confirmation.
+      An exhausted OFF cycle also releases an unconfirmed session with the failure
+      diagnostic retained. This supports separate observation devices that need
+      longer to start.</li>
   <li>An unresolved OFF request is attempted at most three times: immediately,
       after one minute, and after another five minutes. If OFF is still not
       confirmed after the final grace period, no further automatic command is
@@ -5634,6 +5709,17 @@ wird dadurch nicht erhalten.</p>
 <h4>Hinweise</h4>
 <ul>
   <li>&Auml;nderungen an Ger&auml;te- oder Modellattributen werden abgelehnt, solange das echte Playback Ger&auml;te verwaltet. Zuerst <code>mode off</code> setzen und warten, bis <code>stoppingPlayback</code> den Wert 0 hat.</li>
+  <li>Nach einem vom Modul gesendeten ON-Befehl gibt ein beobachteter OFF-Zustand
+      die verwaltete Session erst frei, nachdem der konfigurierte ON-Zustand
+      mindestens einmal erkannt wurde. Die erste ON-R&uuml;ckmeldung best&auml;tigt den
+      Start; erst eine sp&auml;tere OFF-R&uuml;ckmeldung gilt als vorzeitiges/manuelles
+      Ausschalten. Der urspr&uuml;nglich geplante Endzeitpunkt bleibt erhalten, und
+      der konfigurierte OFF-Befehl wird auch dann zu diesem Zeitpunkt versucht,
+      wenn ON nie best&auml;tigt wurde. Nach einem erfolgreich gesendeten modul-eigenen
+      OFF-Befehl kann ein beobachtetes OFF diesen Stopp auch ohne vorherige
+      ON-Best&auml;tigung best&auml;tigen. Ein ausgesch&ouml;pfter OFF-Zyklus gibt auch eine
+      unbest&auml;tigte Session frei; die Fehlerdiagnose bleibt erhalten. Damit werden
+      getrennte Beobachtungsger&auml;te mit l&auml;ngerer Startzeit unterst&uuml;tzt.</li>
   <li>Ein ungekl&auml;rter OFF-Befehl wird h&ouml;chstens dreimal versucht: sofort,
       nach einer Minute und nach weiteren f&uuml;nf Minuten. Bleibt die
       OFF-R&uuml;ckmeldung auch nach der letzten Best&auml;tigungsfrist aus, werden
@@ -5669,8 +5755,8 @@ wird dadurch nicht erhalten.</p>
   "name": "FHEM-PresenceSimulation",
   "abstract": "Learns device switching behaviour and simulates presence",
   "description": "A rolling FHEM presence simulation based on historical device switching sessions. Retained event and DbLog days share one model while trainingSource controls ongoing acquisition and automatic imports. Command targets can use separate observation devices for live feedback and DbLog history. Bounded OFF retries and hardened nonblocking DbLog workers improve runtime safety. It supports switchable generic inline event handlers, real playback, dry-run events, weekday models, and blocking conditions.",
-  "version": "v1.1.10",
-  "x_release_date": "2026-06-28",
+  "version": "v1.1.11",
+  "x_release_date": "2026-10-30",
   "release_status": "testing",
   "license": [
     "gpl_2"
