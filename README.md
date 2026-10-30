@@ -24,7 +24,7 @@ defmod PresenceSimulation PresenceSimulation
 
 A new instance starts safely in `mode=off` and requires at least one valid `deviceNN` attribute.
 
-Version 1.1.10 keeps a module-owned playback session active until its configured ON
+Version 1.1.11 keeps a module-owned playback session active until its configured ON
 state has been observed once. A separate, slow-starting `readingDevice` may therefore
 continue to report OFF during startup without discarding the planned OFF command.
 Persistence schema 3 remains unchanged.
@@ -172,24 +172,21 @@ configured OFF command is still attempted at that time even if ON was never conf
 This is especially relevant when `device` and `readingDevice` are different and the
 observation source needs time to start.
 
+Once a module-owned OFF command has been sent successfully, an observed OFF can
+confirm that stop even if ON was never observed. If the bounded OFF cycle fails,
+automatic release and retained failure diagnostics also apply to unconfirmed starts.
+
 An unresolved OFF state is attempted at most three times: immediately, after one
 minute, and after another five minutes. If the state is still not confirmed after
-the final grace period, PresenceSimulation keeps ownership but sends no more
-automatic commands. The existing `lastError*` readings report the problem; no
-additional failure reading is created.
+the final grace period, PresenceSimulation sends no more automatic OFF commands and
+releases the device from managed state without claiming that it is physically off.
+The existing `lastError*` readings and the FHEM log report the problem; no additional
+failure reading is created. The error remains visible until a later successful
+playback ON action clears it or another error supersedes it.
 
-A new bounded cycle can be started explicitly:
-
-```text
-set PresenceSimulation retryOff <device>
-```
-
-As a last-resort recovery in `mode=off`, an unresolved entry can be released
-without claiming that the device is physically off:
-
-```text
-set PresenceSimulation forceReleaseManaged <device> confirm
-```
+Future playback remains safe after the release: the module sends another ON command
+only when the configured observation reading is unambiguously classified as `off`.
+Devices that still report `on` or an unknown state are not switched on.
 
 ## Diagnostics and blocked-plan behavior
 
@@ -216,7 +213,7 @@ PresenceSimulation_Raw_<name>.json
 PresenceSimulation_State_<name>.json
 ```
 
-The probability model is rebuilt in memory. Persistent files and backups are written with permissions `0600`. Schema version 3 is required; this release intentionally contains no migration or legacy compatibility code.
+The probability model is rebuilt in memory. Persistent files and backups are written with permissions `0600`. Schema version 3 is required. No general migration or legacy compatibility layer is intended. The only temporary exception is the explicitly tracked handling of schema-3 `offFailed=1` entries written by version 1.1.9; GitHub issue #9 records its later removal.
 
 Version 1.1.1 introduced explicit integer `CORE::time()` values for persisted epoch
 timestamps. This avoids fractional `lastCoverageTick` values in FHEM environments
@@ -246,10 +243,19 @@ scripts/build-release.sh
 
 Generated files are written to `dist/`. GitHub Actions runs the same checks for every
 push and pull request. A tag matching the embedded module version, for example
-`v1.1.10`, builds the release and publishes the verified artifacts through GitHub
+`v1.1.11`, builds the release and publishes the verified artifacts through GitHub
 Releases.
 
-Codex instructions and project invariants are maintained in `AGENTS.md`. Changes
-should be made on focused `codex/<description>` branches and submitted as draft pull
-requests. Real FHEM, DbLog, device, playback, shutdown, and restart tests remain a
+Reusable FHEM engineering instructions are maintained in [AGENTS.md](AGENTS.md);
+project-specific invariants are in [AGENTS-PresenceSimulation.md](AGENTS-PresenceSimulation.md).
+Read and apply both files. Changes should be made on focused `codex/<description>`
+branches and submitted as draft pull requests. Real FHEM, DbLog, device, playback,
+shutdown, and restart tests remain a
 separate manual release requirement and must be reported honestly.
+
+The generic [AGENTS.md](AGENTS.md) is a synchronized copy from
+[Flachzange/FHEM_Agent_Rules](https://github.com/Flachzange/FHEM_Agent_Rules).
+The adopted commit is recorded in [.github/agent-rules.json](.github/agent-rules.json).
+Propose generic discoveries centrally; keep project-only rules in the supplement.
+CI verifies the accepted revision and exact copy. Configure its status check as
+required in repository settings to enforce it before merging.
