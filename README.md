@@ -247,3 +247,10 @@ Read and apply both files. Changes should be made on focused `codex/<description
 branches and submitted as draft pull requests. Real FHEM, DbLog, device, playback,
 shutdown, and restart tests remain a
 separate manual release requirement and must be reported honestly.
+
+The generic [AGENTS.md](AGENTS.md) is a synchronized copy from
+[Flachzange/FHEM_Agent_Rules](https://github.com/Flachzange/FHEM_Agent_Rules).
+The adopted commit is recorded in [.github/agent-rules.json](.github/agent-rules.json).
+Propose generic discoveries centrally; keep project-only rules in the supplement.
+CI verifies the accepted revision and exact copy. Configure its status check as
+required in repository settings to enforce it before merging.

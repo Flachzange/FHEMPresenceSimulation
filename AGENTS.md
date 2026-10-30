@@ -4,6 +4,13 @@ This is the reusable foundation for coding agents developing FHEM Perl modules. 
 
 **Load project rules as well:** Before working in any repository, read any applicable root-level `AGENTS-*.md` supplements and apply them alongside this file. Those additional filenames are **not assumed to be loaded automatically** by coding agents. Project-specific requirements belong in the supplement; generic FHEM framework guidance belongs here. For a conflict about verified FHEM behavior, check core sources and reconcile the instructions rather than silently overriding a framework requirement.
 
+## Shared rules maintenance
+
+- The canonical generic file is `AGENTS.md` in [Flachzange/FHEM_Agent_Rules](https://github.com/Flachzange/FHEM_Agent_Rules). In consumer repositories, this file is a synchronized copy, not a place for local generic edits. `.github/agent-rules.json` records the adopted source commit and the project supplement.
+- Put project-specific requirements in the supplement. Propose reusable discoveries in a central draft PR with concrete evidence, applicability, limits and a link to the originating project work; check for duplicates and conflicts before adding a rule. Preserve existing local discoveries as a patch when drift is found instead of overwriting them.
+- Adopt generic changes only after the central PR is merged. Synchronization updates the copy and source revision together; it does not approve new rules. Project supplements must not silently contradict the shared rules: resolve the conflict explicitly with the maintainer.
+- Repository changes and cross-repository PRs remain subject to the maintainer's authorization. These instructions do not grant blanket permission to edit additional repositories, merge PRs, or publish releases.
+
 ## Source of truth
 
 - Treat the current files on the active repository branch as authoritative. Inspect the relevant module sources, tests, CI and documentation and trace affected paths before editing. Do not use old branches, generated archives, chat excerpts, cached copies or prior releases as authoritative code.
