@@ -762,7 +762,7 @@ sub raw_day {
         readingDevice => 'SlowObserver', reading => 'state',
         onPattern => '^connected$', offPattern => '^disconnected$', offCommand => 'off',
         startConfirmed => 0, stopping => 0, offAttempts => 0,
-        offFailed => 0, offLastError => '',
+        offLastError => '',
     };
     $PresenceSimulation_DATA{$name}{state}{expected}{$dev} = {
         state => 'on', until => CORE::time() + 20,
@@ -807,7 +807,7 @@ sub raw_day {
         readingDevice => 'UnconfirmedObserver', reading => 'state',
         onPattern => '^on$', offPattern => '^off$', offCommand => 'off',
         startConfirmed => 0, stopping => 0, offAttempts => 0,
-        offFailed => 0, offLastError => '',
+        offLastError => '',
     };
     $PresenceSimulation_DATA{$name}{state}{managed}{$dev} = $entry;
     $TEST_READINGS{UnconfirmedObserver}{state} = 'off';
@@ -850,7 +850,7 @@ sub raw_day {
             readingDevice => $observer, reading => 'state',
             onPattern => '^on$', offPattern => '^off$', offCommand => 'off',
             startConfirmed => 0, stopping => 0, offAttempts => 0,
-            offFailed => 0, offLastError => '',
+            offLastError => '',
         };
         $PresenceSimulation_DATA{$name}{state}{managed}{$dev} = $entry;
         $TEST_READINGS{$observer}{state} = $observed;
@@ -1918,11 +1918,11 @@ sub raw_day {
     ($validated, $error) = PresenceSimulation_ValidatePersistedData($hash, 'state', $state);
     ok($validated && !defined $error,
         'managed playback state accepts a separate observation-device snapshot');
-    @{$state->{managed}{DeviceA}}{qw(stopping offAttempts offFailed offRetryDue offLastError)}
-        = (1, 3, 1, 100, 'off not confirmed');
+    @{$state->{managed}{DeviceA}}{qw(stopping offAttempts offRetryDue offLastError)}
+        = (1, 3, 100, 'off not confirmed');
     ($validated, $error) = PresenceSimulation_ValidatePersistedData($hash, 'state', $state);
     ok($validated && !defined $error,
-        'temporary issue-#9 compatibility accepts persisted bounded OFF retry metadata');
+        'managed playback state accepts persisted bounded OFF retry metadata');
     $state->{managed}{DeviceA}{startConfirmed} = 0;
     ($validated, $error) = PresenceSimulation_ValidatePersistedData($hash, 'state', $state);
     ok($validated && !defined $error,
@@ -1994,7 +1994,7 @@ sub raw_day {
         offDue => CORE::time() + 300, durationMinutes => 5, modelType => 'all-days',
         readingDevice => $dev, reading => 'state', onPattern => '^on$',
         offPattern => '^off$', offCommand => 'off', startConfirmed => 0,
-        stopping => 0, offAttempts => 0, offFailed => 0, offLastError => '',
+        stopping => 0, offAttempts => 0, offLastError => '',
     };
 
     $TEST_READINGS{$dev}{state} = 'off';
@@ -2015,34 +2015,69 @@ sub raw_day {
 
 
 {
-    my $name = 'RestartReleasesFailedOff';
-    my $hash = make_instance($name);
-    my $dev = 'RestartOffDevice';
-    my $cfg = {
-        device => $dev, readingDevice => $dev, reading => 'state',
-        onPattern => '^on$', offPattern => '^off$',
-        onRe => qr/^on$/, offRe => qr/^off$/, offCommand => 'off',
-    };
-    $PresenceSimulation_DATA{$name}{config} = {
-        order => [$dev], globalBlocks => [], ready => 1,
-        byDevice => { $dev => $cfg },
-    };
-    $PresenceSimulation_DATA{$name}{state}{managed}{$dev} = {
-        startedAt => 1, offDue => 2, durationMinutes => 1, bin => 0,
-        weekday => 1, modelType => 'all-days', readingDevice => $dev,
-        reading => 'state', onPattern => '^on$', offPattern => '^off$',
-        offCommand => 'off', stopping => 1, offAttempts => 3,
-        offFailed => 1, offLastError => 'not confirmed',
-    };
-    $TEST_READINGS{$dev}{state} = 'on';
-    PresenceSimulation_SetError($hash, "$dev did not confirm off after 3 attempts", 'playback');
-    PresenceSimulation_ReconcileRuntimeState($hash);
-    ok(!exists $PresenceSimulation_DATA{$name}{state}{managed}{$dev},
-        'temporary issue-#9 compatibility releases a persisted failed managed entry');
-    is($TEST_READINGS{$name}{lastError}, "$dev did not confirm off after 3 attempts",
-        'restart reconciliation preserves the final playback error after release');
-    is($TEST_READINGS{$name}{lastErrorSource}, 'playback',
-        'restart reconciliation keeps the playback error source');
+    local $TEST_ATTR{global}{modpath} = tempdir(CLEANUP => 1);
+    for my $observed (qw(on off unavailable)) {
+        for my $waiting (0, 1) {
+            my $name = "RestartOff_${observed}_$waiting";
+            my $hash = make_instance($name);
+            my $dev = 'RestartCommandDevice';
+            my $observer = 'RestartObservationDevice';
+            my $now = CORE::time();
+            my $deadline = $now + ($waiting ? 300 : -10);
+            $PresenceSimulation_DATA{$name}{state}{managed}{$dev} = {
+                offDue => $now - 600, durationMinutes => 1, modelType => 'all-days',
+                readingDevice => $observer, reading => 'state',
+                onPattern => '^on$', offPattern => '^off$', offCommand => 'off',
+                stopping => 1, offAttempts => 3, offRetryDue => $deadline,
+                offEventEmitted => 1, offLastError => 'not confirmed',
+                unusedMetadata => 'has no runtime meaning',
+            };
+            $PresenceSimulation_DATA{$name}{state}{expected}{$dev} = {
+                state => 'off', until => $now + 20,
+            };
+            $TEST_READINGS{$observer}{state} = $observed;
+            PresenceSimulation_SaveAll($hash, 1);
+            my $file = PresenceSimulation_FileNames($hash)->{state};
+            ok(-f $file, "$name: pending OFF state is persisted to disk");
+
+            $PresenceSimulation_DATA{$name} = PresenceSimulation_NewInstanceData($name);
+            $TEST_READINGS{$name} = {};
+            @TEST_COMMANDS = ();
+            PresenceSimulation_LoadAll($hash);
+            my $loaded = $PresenceSimulation_DATA{$name}{state}{managed}{$dev};
+            ok($loaded, "$name: otherwise valid state loads with unused extra metadata");
+            is($loaded->{offAttempts}, 3, "$name: restart preserves exhausted attempt count");
+            is($loaded->{offRetryDue}, $deadline, "$name: restart preserves the confirmation deadline");
+
+            PresenceSimulation_ReconcileRuntimeState($hash);
+            my $managed = $PresenceSimulation_DATA{$name}{state}{managed};
+            is(exists $managed->{$dev} ? 1 : 0, $observed eq 'off' ? 0 : 1,
+                "$name: reconciliation releases only a confirmed OFF");
+            PresenceSimulation_ProcessPendingPlaybackStops($hash, $now);
+            my $shouldWait = $waiting && $observed ne 'off';
+            is(exists $managed->{$dev} ? 1 : 0, $shouldWait ? 1 : 0,
+                "$name: regular stop processing respects the final grace period");
+            if ($shouldWait) {
+                PresenceSimulation_ProcessPendingPlaybackStops($hash, $deadline - 1);
+                ok(exists $managed->{$dev}, "$name: ownership remains until the last second of grace");
+            }
+
+            PresenceSimulation_ProcessPendingPlaybackStops($hash, $deadline);
+            ok(!exists $managed->{$dev}, "$name: the regular workflow finishes the restored stop");
+            ok(!exists $PresenceSimulation_DATA{$name}{state}{expected}{$dev},
+                "$name: completed stop removes its feedback expectation");
+            is_deeply(\@TEST_COMMANDS, [], "$name: restart sends no fourth OFF command");
+            if ($observed ne 'off') {
+                is($TEST_READINGS{$name}{lastError}, "$dev did not confirm off after 3 attempts",
+                    "$name: final failure remains visible");
+                is($TEST_READINGS{$name}{lastErrorSource}, 'playback',
+                    "$name: final failure uses playback diagnostics");
+            }
+            PresenceSimulation_UpdateReadings($hash);
+            is($TEST_READINGS{$name}{activePlayback}, 0, "$name: finished stop leaves no active ownership");
+            is($TEST_READINGS{$name}{stoppingPlayback}, 0, "$name: finished stop leaves no pending ownership");
+        }
+    }
 }
 
 {
@@ -2198,7 +2233,7 @@ sub raw_day {
         startedAt => 1, offDue => 120, durationMinutes => 2, bin => 4, weekday => 1,
         modelType => 'all-days', readingDevice => 'DeviceA', reading => 'state',
         onPattern => '^on$', offPattern => '^off$', offCommand => 'off',
-        stopping => 0, offAttempts => 0, offFailed => 0, offLastError => '', offSentAt => 5,
+        stopping => 0, offAttempts => 0, offLastError => '', offSentAt => 5,
     };
     $state->{dryManaged}{DeviceB} = {
         startedAt => 1, offDue => 120, durationMinutes => 2, bin => 4, weekday => 1,
@@ -2322,7 +2357,7 @@ sub raw_day {
         bin => 1, weekday => 1, modelType => 'all-days',
         readingDevice => $dev, reading => 'state',
         onPattern => '^on$', offPattern => '^off$', offCommand => 'off',
-        stopping => 1, offAttempts => 0, offFailed => 0, offLastError => '',
+        stopping => 1, offAttempts => 0, offLastError => '',
     };
     $PresenceSimulation_DATA{$name}{state}{managed}{$dev} = $entry;
     $TEST_READINGS{$dev}{state} = 'on';
@@ -2394,7 +2429,7 @@ sub raw_day {
         offDue => 100, durationMinutes => 1, modelType => 'all-days',
         readingDevice => $dev, reading => 'state',
         onPattern => '^on$', offPattern => '^off$', offCommand => 'off',
-        stopping => 1, offAttempts => 1, offFailed => 0,
+        stopping => 1, offAttempts => 1,
         offLastError => "$dev off attempt 1 failed: temporary error",
     };
     $PresenceSimulation_DATA{$name}{state}{managed}{$dev} = $entry;
@@ -2687,8 +2722,8 @@ sub raw_day {
         'former commandref anchors are absent');
     ok(index($source, 'raw   => "$dir/PresenceSimulation_Raw_$safe.json"') >= 0,
         'raw persistence uses the PresenceSimulation prefix');
-    like($source, qr/my \$PRESENCE_SIM_VERSION = '1\.1\.11'/,
-        'module version is 1.1.11');
+    like($source, qr/my \$PRESENCE_SIM_VERSION = '1\.1\.12'/,
+        'module version is 1.1.12');
     like($source, qr/^# Copyright \(C\) 2026 Flachzange$/m,
         'source copyright holder is Flachzange');
     unlike($source, qr/Christoph Evers/,
@@ -2818,7 +2853,7 @@ sub raw_day {
     my $meta = eval { JSON::PP->new->decode($meta_text) };
     ok(!$@ && ref $meta eq 'HASH', 'embedded META.json is valid JSON');
     is($meta->{name}, 'FHEM-PresenceSimulation', 'META name matches the new module type');
-    is($meta->{version}, 'v1.1.11', 'META version matches module version');
+    is($meta->{version}, 'v1.1.12', 'META version matches module version');
     ok(exists $meta->{prereqs}{runtime}{requires}{'File::Spec'},
         'META declares the File::Spec runtime prerequisite');
     is_deeply($meta->{author}, ['Flachzange <>'],

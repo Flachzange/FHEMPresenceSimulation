@@ -24,10 +24,10 @@ defmod PresenceSimulation PresenceSimulation
 
 A new instance starts safely in `mode=off` and requires at least one valid `deviceNN` attribute.
 
-Version 1.1.11 keeps a module-owned playback session active until its configured ON
-state has been observed once. A separate, slow-starting `readingDevice` may therefore
-continue to report OFF during startup without discarding the planned OFF command.
-Persistence schema 3 remains unchanged.
+Version 1.1.12 resumes pending OFF cycles from their persisted attempt count and
+confirmation deadline using the regular playback workflow. Restarting does not
+grant another retry cycle. The obsolete terminal-failure flag and its special
+handling have been removed; persistence schema 3 remains unchanged.
 
 FHEMWEB uses a module-owned default state-icon mapping without creating an
 attribute:
@@ -188,6 +188,11 @@ Future playback remains safe after the release: the module sends another ON comm
 only when the configured observation reading is unambiguously classified as `off`.
 Devices that still report `on` or an unknown state are not switched on.
 
+After a restart, the saved attempt count and confirmation deadline remain in
+effect. An already confirmed OFF ends management immediately. Otherwise, a cycle
+with three attempts waits for any remaining final grace period before automatic
+release; no fourth OFF command is sent.
+
 ## Diagnostics and blocked-plan behavior
 
 `rawSessionsTodayDiscarded` counts event-training sessions assigned to the current
@@ -213,7 +218,10 @@ PresenceSimulation_Raw_<name>.json
 PresenceSimulation_State_<name>.json
 ```
 
-The probability model is rebuilt in memory. Persistent files and backups are written with permissions `0600`. Schema version 3 is required. No general migration or legacy compatibility layer is intended. The only temporary exception is the explicitly tracked handling of schema-3 `offFailed=1` entries written by version 1.1.9; GitHub issue #9 records its later removal.
+The probability model is rebuilt in memory. Persistent files and backups are
+written with permissions `0600`. Schema version 3 is required. No schema migration
+or special legacy-state handling is performed. Unused additional metadata does not
+invalidate an otherwise valid schema-3 state and does not control playback.
 
 Version 1.1.1 introduced explicit integer `CORE::time()` values for persisted epoch
 timestamps. This avoids fractional `lastCoverageTick` values in FHEM environments
@@ -243,7 +251,7 @@ scripts/build-release.sh
 
 Generated files are written to `dist/`. GitHub Actions runs the same checks for every
 push and pull request. A tag matching the embedded module version, for example
-`v1.1.11`, builds the release and publishes the verified artifacts through GitHub
+`v1.1.12`, builds the release and publishes the verified artifacts through GitHub
 Releases.
 
 Reusable FHEM engineering instructions are maintained in [AGENTS.md](AGENTS.md);

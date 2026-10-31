@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.1.12 — 2026-10-30
+
+Remove the obsolete terminal-OFF failure flag and its special handling. Pending
+stops now use only the regular persisted attempt count and confirmation deadline.
+Persistence schema 3 remains unchanged; no migration or new public interface is added.
+
+- Remove the dedicated flag checks from shutdown/undef, pending stops, managed OFF
+  processing and restart reconciliation, along with the unused flag initialization
+  and validation.
+- Existing valid schema-3 state remains loadable when it contains unused additional
+  metadata. The metadata does not influence playback behavior.
+- A saved cycle with three attempts waits for any remaining final grace period,
+  then releases management with the final playback error. Restart sends no fourth
+  OFF command. An already confirmed OFF releases management immediately.
+- Confirmed OFF reconciliation also clears the pending expected-feedback entry.
+- Replace the dedicated compatibility test with saved-state restart cases for ON,
+  OFF and unknown observations, each with an expired or pending deadline.
+- The complete self-test suite contains 510 checks. Real FHEM restart, hardware,
+  DbLog and lifecycle integration tests remain separate manual verification.
+
 ## 1.1.11 — 2026-10-30
 
 This release prevents a separate observation device from prematurely releasing a

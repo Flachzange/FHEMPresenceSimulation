@@ -1,6 +1,6 @@
-# Review checklist for PresenceSimulation 1.1.11
+# Review checklist for PresenceSimulation 1.1.12
 
-Release self-test baseline: **437/437 PASS**.
+Release self-test baseline: **510/510 PASS**.
 
 ## Implemented
 
@@ -11,7 +11,8 @@ Release self-test baseline: **437/437 PASS**.
 - Managed sessions contain a durable stop-command snapshot.
 - Shutdown and Undef attempt to switch off managed real devices.
 - Teardown prevents new delayed-save timers.
-- Unknown readings retain managed ownership and create a runtime error.
+- Unknown readings never count as OFF; bounded stop handling determines when
+  unresolved playback ownership ends.
 - Unexpected ON feedback keeps existing ownership consistent.
 - FHEM `IsDisabled()` and `disabledForIntervals` are supported.
 - Automatic DbLog scheduling resumes when a time-based disable interval ends.
@@ -63,9 +64,8 @@ Release self-test baseline: **437/437 PASS**.
   from managed state without adding another public reading or treating it as off.
 - Removed `retryOff` and `forceReleaseManaged`; diagnosis and any manual device
   command remain under user control through normal FHEM mechanisms.
-- Existing schema-3 `offFailed` entries are accepted and automatically reconciled
-  while retaining the playback error. This temporary compatibility exception is
-  explicitly marked in code and tracked for removal in issue #9.
+- Saved pending OFF cycles resume through normal retry processing, preserving
+  their attempt count and confirmation deadline without an extra attempt.
 - DbLog credentials are absent from visible BlockingCall arguments and use a
   randomized mode-0600 parameter file.
 - Queued `WAITING:` BlockingCall jobs are invalidated on abort.
@@ -79,7 +79,7 @@ Release self-test baseline: **437/437 PASS**.
 ## Automated verification
 
 - Perl syntax check.
-- 437 self-tests.
+- 510 self-tests.
 - Embedded META JSON parse and CPAN metadata validation.
 - FHEM `commandref_join.pl`-compatible single-module checks for English and German blocks.
 - HTML parse and duplicate-anchor checks.
@@ -98,6 +98,15 @@ The automated suite uses FHEM stubs. Before publication beyond `testing`/`experi
 - FHEM shutdown/restart,
 - `disabledForIntervals`,
 - and harmless real playback devices.
+
+## 1.1.12 persisted OFF workflow
+
+- [ ] After restart, three already-sent OFF attempts do not grant a fourth attempt.
+- [ ] With ON or unknown feedback, the final grace period is preserved and its
+      expiration releases ownership with a visible playback error.
+- [ ] With confirmed OFF feedback, reconciliation releases ownership immediately
+      and removes the corresponding expected-feedback entry.
+- [ ] Both management readings reach zero after the restored stop finishes.
 
 ## 1.1.11 delayed ON confirmation
 
@@ -127,8 +136,6 @@ The automated suite uses FHEM stubs. Before publication beyond `testing`/`experi
       retain a clear device-specific failure.
 - [ ] `retryOff` and `forceReleaseManaged` are absent from FHEMWEB's set list and
       rejected as unknown commands.
-- [ ] A persisted schema-3 entry with `offFailed=1` is released on initialization
-      without a schema migration.
 - [ ] A released device reporting `on` or an unknown state receives no ON command;
       playback resumes only after a recognized `off` state.
 - [ ] Playback-sensitive attributes become editable once no other managed device
