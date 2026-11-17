@@ -137,7 +137,7 @@ This quality gate applies after every change, not just a release. Keep verified,
 - Treat generated release artifacts as build outputs: do not edit them manually or commit them. Keep their location and packaging layout in the project supplement; verify generated copies against the authoritative sources.
 - Validate Perl syntax, complete tests, callback names, duplicate globals, required dependencies, commandref/META when implemented, UTF-8, JSON fixtures, source-to-package byte equality, checksums, and deterministic release artifacts before publishing. Document exceptions for steps not yet available.
 - Never claim the FHEM module is production-ready solely because isolated Perl syntax and parser tests pass.
-- Use a focused branch named `codex/<short-description>` for **new work** unless the maintainer explicitly requests otherwise or work continues in an already-approved existing PR branch.
+- Use a focused, descriptive branch for **new work**, following repository-specific naming conventions where they exist, unless the maintainer explicitly requests otherwise or work continues in an already-approved existing PR branch.
 - Keep PRs reviewable; open drafts by default. PR descriptions must cover motivation, change scope, user-visible behavior, inspected FHEM source/side effects, tests actually run, tests not run, migration impact, and remaining risk.
 - Do not merge, publish a release, rewrite history, or force-push shared branches without explicit maintainer approval.
 

@@ -3,7 +3,7 @@
   "source": {
     "repository": "Flachzange/FHEM_Agent_Rules",
     "path": "AGENTS.md",
-    "revision": "d323bfd3d12d33d02651bf1c763daaa379296f7c"
+    "revision": "6f9f04ffc2697e492a28d48037e4e07ece2a6674"
   },
   "supplement": "AGENTS-PresenceSimulation.md"
 }
